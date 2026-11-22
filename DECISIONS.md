@@ -193,6 +193,9 @@ The port replaced the whole codec file (encoder and decoder). Comparing the save
 Reading: RVQ codebook 0 carries the coarse timbre and flips in only 29/879 frames (3.3%); differences grow towards the fine residual books. So the port shifted fine texture and touched the coarse envelope occasionally — the same speaker, a slightly different rendering — rather than replacing the voice. The cause is the encoder's new numerics (conv/weight layout, float order): a nearest-neighbour VQ is discontinuous, so a tiny perturbation flips indices even though the encoder logic did not change.
 The decoder itself cannot change the voice: it renders codes. Stateful decode is mathematically the same causal computation as the offline one (carried conv tails and attention KV), differing only in floating-point order; a real bug would show as clicks repeating every chunk (46 ms), which listening and ASR did not show.
 
+Where the gain came from: the **decoder**, not the encoder. v002 → v003 on the 35 s test: `stream_decode` 117.5 s → 1.20 s (98x, 153.8 → 1.56 ms/frame), total RTF 4.05 → 0.74 (5.4x), with the AR unchanged at ~25.2 s. The old path held back 144 frames (6.7 s of audio) and re-decoded the prefix. The encoder is not in the streaming loop at all: `ref_encode` is ~0.95 s per reference (old path measured 1.16–1.35 s, upstream 0.89 s in one run — the same order, no gain), and it is the whole difference between raw TTFA (~1.03 s) and profile TTFA (~0.12 s).
+
+
 
 
 ### Prefill: measurement and conclusion
