@@ -179,13 +179,42 @@ private:
     ggml_tensor  * slow_window_ids_t_  = nullptr;
     std::vector<ggml_tensor *> slow_cb_id_tensors_;
 
-    ggml_context * fast_ctx_   = nullptr;
-    ggml_cgraph  * fast_gf_    = nullptr;
-    ggml_tensor  * fast_hidden0_     = nullptr;
-    ggml_tensor  * fast_prefix_ids_  = nullptr;
-    ggml_tensor  * fast_positions_   = nullptr;
-    ggml_tensor  * fast_out_idx_     = nullptr;
-    ggml_tensor  * fast_logits_      = nullptr;
+
+    // A reusable Fast-AR graph for a fixed number of new tokens (1 or 2), built once and replayed.
+    struct FastGraph {
+        int32_t              n_tok = 0;
+        std::vector<uint8_t> ctx_buf;
+        ggml_context *       ctx   = nullptr;
+        ggml_cgraph *        gf    = nullptr;
+        ggml_backend_sched_t sched = nullptr;
+        ggml_tensor * hidden    = nullptr; // [embedding_length, 1]  (2-token graph only)
+        ggml_tensor * token_ids = nullptr; // [1]
+        ggml_tensor * positions = nullptr; // [n_tok] i32, RoPE positions
+        ggml_tensor * rows      = nullptr; // [n_tok] i64, KV cache rows written
+        ggml_tensor * mask      = nullptr; // [cache_len, n_tok] f32 additive attention mask
+        ggml_tensor * logits    = nullptr; // [codebook_size, 1]
+    };
+
+    bool fast_decode_uncached(const std::vector<float> & hidden,
+                              const std::vector<int32_t> & prefix_codes,
+                              int32_t n_threads,
+                              std::vector<float> & logits_out);
+    bool init_fast_cache();
+    bool build_fast_graph(FastGraph & g, int32_t n_tok);
+    bool run_fast_graph(FastGraph & g, const float * hidden, int32_t token,
+                        int32_t first_pos, int32_t n_threads, std::vector<float> & logits_out);
+    void free_fast_cache();
+
+    // Fast-AR keeps a small KV cache so each codebook step only evaluates its one new token.
+    FastGraph      fast_graph_[2];          // [0]: 1 new token, [1]: 2 new tokens (hidden + first code)
+    ggml_context * fast_kv_ctx_ = nullptr;
+    ggml_backend_buffer_t fast_kv_buf_ = nullptr;
+    std::vector<ggml_tensor *> fast_k_;     // per layer [kv_size, fast_cache_len_] f32
+    std::vector<ggml_tensor *> fast_v_;
+    int32_t        fast_cache_len_ = 0;
+    bool           fast_cache_failed_ = false;
+    std::vector<float>   fast_cached_hidden_;
+    std::vector<int32_t> fast_cached_prefix_;
 
     void invalidate_cached_graphs();
 
