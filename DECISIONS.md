@@ -195,6 +195,15 @@ The decoder itself cannot change the voice: it renders codes. Stateful decode is
 
 Where the gain came from: the **decoder**, not the encoder. v002 → v003 on the 35 s test: `stream_decode` 117.5 s → 1.20 s (98x, 153.8 → 1.56 ms/frame), total RTF 4.05 → 0.74 (5.4x), with the AR unchanged at ~25.2 s. The old path held back 144 frames (6.7 s of audio) and re-decoded the prefix. The encoder is not in the streaming loop at all: `ref_encode` is ~0.95 s per reference (old path measured 1.16–1.35 s, upstream 0.89 s in one run — the same order, no gain), and it is the whole difference between raw TTFA (~1.03 s) and profile TTFA (~0.12 s).
 
+### Encoder restored (branch `exp/old-encoder`)
+Listening preferred the old codes, so the encoder path was reverted while keeping the stateful decoder. The numeric cause: the port turned snake's division into a reciprocal multiply and the conv into gather+matmul; a nearest-neighbour VQ amplifies that into 15% different codes.
+Verified after the revert:
+- reference profile byte-identical to v002 (`7F6BC963…`), streaming audio with it byte-identical to the old-profile A/B;
+- full 8 tests: WER 0.0015 (was 0.0374), RTF 0.295–0.377 (no regression);
+- raw-reference peak 6.99 GB (was 8.66), `ref_encode` 814–828 ms (was 946–980).
+The legacy ops are used only by the encoder (the decoder keeps the fast path). Commit `c362001`.
+
+
 
 
 

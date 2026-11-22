@@ -656,6 +656,70 @@ static ggml_tensor * build_convnext_block(ggml_context * ctx, AudioCodec::Impl &
     return ggml_add(ctx, x, y);
 }
 
+// The pre-port encoder ops, kept only for the encoder: they reproduce the reference
+// codes this engine produced before the stateful-codec port (the port changed the
+// snake division into a reciprocal multiply and the conv into a gather+matmul).
+static ggml_tensor * snake_activation_legacy(ggml_context * ctx, ggml_tensor * x, ggml_tensor * alpha) {
+    ggml_tensor * alpha_2d  = reshape_vector_cl(ctx, alpha, x->ne[0]);
+    ggml_tensor * alpha_rep = repeat_checked(ctx, alpha_2d, x, "repeat:snake_alpha");
+    ggml_tensor * ax        = ggml_mul(ctx, alpha_rep, x);
+    ggml_tensor * sin_ax    = ggml_sin(ctx, ax);
+    ggml_tensor * sin_sq    = ggml_sqr(ctx, sin_ax);
+    return ggml_add(ctx, x, ggml_div(ctx, sin_sq, alpha_rep));
+}
+
+static ggml_tensor * causal_conv_1d_legacy(ggml_context * ctx, ggml_tensor * weight, ggml_tensor * bias,
+                                           ggml_tensor * x, int stride, int dilation) {
+    const int kernel_size = static_cast<int>((weight->ne[0] - 1) * dilation + 1);
+    const int pad   = kernel_size - stride;
+    const int extra = static_cast<int>(extra_padding_for_conv1d(x->ne[1], kernel_size, stride, pad));
+    ggml_tensor * x_lc = cl_to_lc(ctx, x);
+    x_lc = ggml_pad_ext(ctx, x_lc, pad, extra, 0, 0, 0, 0, 0, 0);
+    ggml_tensor * y = ggml_conv_1d(ctx, weight, x_lc, stride, 0, dilation);
+    y = add_channel_bias_lc(ctx, y, bias);
+    return lc_to_cl(ctx, y);
+}
+
+static ggml_tensor * build_residual_unit_legacy(ggml_context * ctx, ggml_context * ctx_w,
+                                                const std::string & prefix, ggml_tensor * x, int dilation) {
+    auto req = [&](const std::string & n) -> ggml_tensor * {
+        ggml_tensor * t = ggml_get_tensor(ctx_w, n.c_str());
+        if (!t) throw std::runtime_error("missing tensor: " + n);
+        return t;
+    };
+    ggml_tensor * y = snake_activation_legacy(ctx, x, req(prefix + ".block.0.alpha"));
+    y = causal_conv_1d_legacy(ctx, req(prefix + ".block.1.conv.weight"), req(prefix + ".block.1.conv.bias"), y, 1, dilation);
+    y = snake_activation_legacy(ctx, y, req(prefix + ".block.2.alpha"));
+    y = causal_conv_1d_legacy(ctx, req(prefix + ".block.3.conv.weight"), req(prefix + ".block.3.conv.bias"), y, 1, 1);
+    return ggml_add(ctx, x, y);
+}
+
+static ggml_tensor * build_convnext_block_legacy(ggml_context * ctx, ggml_context * ctx_w,
+                                                 const std::string & prefix, ggml_tensor * x) {
+    auto req = [&](const std::string & n) -> ggml_tensor * {
+        ggml_tensor * t = ggml_get_tensor(ctx_w, n.c_str());
+        if (!t) throw std::runtime_error("missing tensor: " + n);
+        return t;
+    };
+    ggml_tensor * dw_w = req(prefix + ".dwconv.conv.weight");
+    ggml_tensor * dw_b = req(prefix + ".dwconv.conv.bias");
+    const int kernel_size_dw = static_cast<int>(dw_w->ne[0]);
+    const int pad_dw = kernel_size_dw - 1;
+    const int extra_dw = static_cast<int>(extra_padding_for_conv1d(x->ne[1], kernel_size_dw, 1, pad_dw));
+    ggml_tensor * x_lc = cl_to_lc(ctx, x);
+    x_lc = ggml_pad_ext(ctx, x_lc, pad_dw, extra_dw, 0, 0, 0, 0, 0, 0);
+    ggml_tensor * y_lc = ggml_conv_1d_dw(ctx, dw_w, x_lc, 1, 0, 1);
+    y_lc = add_channel_bias_lc(ctx, y_lc, dw_b);
+    ggml_tensor * y = lc_to_cl(ctx, y_lc);
+
+    y = layer_norm_affine(ctx, y, req(prefix + ".norm.weight"), req(prefix + ".norm.bias"), 1e-6f);
+    y = linear_bias(ctx, req(prefix + ".pwconv1.weight"), req(prefix + ".pwconv1.bias"), y, "mul_mat:cn_pw1");
+    y = ggml_gelu_erf(ctx, y);
+    y = linear_bias(ctx, req(prefix + ".pwconv2.weight"), req(prefix + ".pwconv2.bias"), y, "mul_mat:cn_pw2");
+    y = scale_channels_cl(ctx, y, req(prefix + ".gamma"));
+    return ggml_add(ctx, x, y);
+}
+
 static ggml_tensor * build_encoder_block(ggml_context * ctx, AudioCodec::Impl & impl,
                                           const std::string & prefix, ggml_tensor * x,
                                           int stride, int32_t n_transformer_layers,
@@ -665,11 +729,11 @@ static ggml_tensor * build_encoder_block(ggml_context * ctx, AudioCodec::Impl & 
         if (!t) throw std::runtime_error("missing tensor: " + n);
         return t;
     };
-    x = build_residual_unit(ctx, impl, prefix + ".0", x, 1);
-    x = build_residual_unit(ctx, impl, prefix + ".1", x, 3);
-    x = build_residual_unit(ctx, impl, prefix + ".2", x, 9);
-    x = snake_activation(ctx, impl, x, req(prefix + ".3.alpha"));
-    x = causal_conv_1d(ctx, impl, req(prefix + ".4.conv.weight"), req(prefix + ".4.conv.bias"), x, stride, 1);
+    x = build_residual_unit_legacy(ctx, impl.ctx_w, prefix + ".0", x, 1);
+    x = build_residual_unit_legacy(ctx, impl.ctx_w, prefix + ".1", x, 3);
+    x = build_residual_unit_legacy(ctx, impl.ctx_w, prefix + ".2", x, 9);
+    x = snake_activation_legacy(ctx, x, req(prefix + ".3.alpha"));
+    x = causal_conv_1d_legacy(ctx, req(prefix + ".4.conv.weight"), req(prefix + ".4.conv.bias"), x, stride, 1);
 
     if (n_transformer_layers > 0) {
         x = build_transformer(ctx, impl.ctx_w, prefix + ".5", x,
@@ -1240,7 +1304,7 @@ bool AudioCodec::encode(const float * audio, int32_t n_samples, int32_t n_thread
     ggml_tensor * latent    = nullptr;
     try {
 
-        ggml_tensor * x = causal_conv_1d(ctx, *impl_,
+        ggml_tensor * x = causal_conv_1d_legacy(ctx,
             ggml_get_tensor(impl_->ctx_w, (impl_->tprefix + "encoder.block.0.conv.weight").c_str()),
             ggml_get_tensor(impl_->ctx_w, (impl_->tprefix + "encoder.block.0.conv.bias").c_str()),
             audio_in, 1, 1);
@@ -1258,8 +1322,8 @@ bool AudioCodec::encode(const float * audio, int32_t n_samples, int32_t n_thread
             if (!t) throw std::runtime_error("missing tensor: " + n);
             return t;
         };
-        x = snake_activation(ctx, *impl_, x, req(impl_->tprefix + "encoder.block." + std::to_string(last) + ".alpha"));
-        x = causal_conv_1d(ctx, *impl_,
+        x = snake_activation_legacy(ctx, x, req(impl_->tprefix + "encoder.block." + std::to_string(last) + ".alpha"));
+        x = causal_conv_1d_legacy(ctx,
             req(impl_->tprefix + "encoder.block." + std::to_string(last + 1) + ".conv.weight"),
             req(impl_->tprefix + "encoder.block." + std::to_string(last + 1) + ".conv.bias"),
             x, 1, 1);
@@ -1323,9 +1387,9 @@ bool AudioCodec::encode(const float * audio, int32_t n_samples, int32_t n_thread
             };
             for (size_t i = 0; i < impl_->quantizer_downsample_factor.size(); ++i) {
                 const std::string pfx = impl_->tprefix + "quantizer.downsample." + std::to_string(i);
-                x2 = causal_conv_1d(ctx2, *impl_, req2(pfx + ".0.conv.weight"), req2(pfx + ".0.conv.bias"),
+                x2 = causal_conv_1d_legacy(ctx2, req2(pfx + ".0.conv.weight"), req2(pfx + ".0.conv.bias"),
                                     x2, impl_->quantizer_downsample_factor[i], 1);
-                x2 = build_convnext_block(ctx2, *impl_, pfx + ".1", x2);
+                x2 = build_convnext_block_legacy(ctx2, impl_->ctx_w, pfx + ".1", x2);
             }
             x2 = build_transformer(ctx2, impl_->ctx_w, impl_->tprefix + "quantizer.pre_module", x2,
                                     impl_->rvq_transformer_block_size,
