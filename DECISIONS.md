@@ -213,3 +213,10 @@ Full run after all changes: `runs/v074-release-final`, RTF 0.309–0.397, all 8 
 - Tokenizer note: `tokenizer.json` is a separate 13 MB file (the GGUF has only `vocab_size` and the audio pad id). A pruned model must ship a tokenizer whose ids match its vocabulary; the engine takes the path explicitly (`-t`) and looks up the special tokens by string, but the semantic range comes from the GGUF metadata, so both files must belong to the same model. A tokenizer without `<|im_end|>` now fails at load instead of generating to `max_tokens` (a pruned tokenizer that drops control tokens would never stop).
 Commit `da925a8`, `b093af3`.
 
+### Which quants are actually verified
+The README model table used to present seven quants as if all had been tried. Only two have:
+- `q4_k_m` — the working model: full 8-test CLI streaming runs, ASR round-trip, determinism; ~4.3 GB VRAM steady, ~1.0 GB RSS, peak ~8.7 GB while encoding a 40 s reference;
+- `q8_0` — verified on the server path: full 8-test server suite (profile + raw), TTFA matrix, ASR round-trip.
+The rest (`f16`, `q6_k`, `q5_k_m`, `q3_k`, `q2_k`) are upstream's published files and are marked unverified; the usage examples now use `q4_k_m`. The old VRAM table (7.2 GB for q4_k_m, 2.5 GB KV pre-allocated for 32k) was upstream's and contradicted our measurements: the KV cache is sized to `prompt + max_new_tokens` (0.17–0.33 GB) and the steady total is ~4.3 GB. Commit `ad8446e`.
+
+
