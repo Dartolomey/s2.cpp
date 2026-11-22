@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <mutex>
 #include <vector>
 
 #include "s2_model.h"
@@ -38,6 +39,14 @@ public:
 
     void clear_decode_cache();
 
+    // A streamed decode: each call decodes the frames that follow the ones of the call before, and the chunks add
+    // up to one decode of all the frames. Each stream keeps its own state, so streams can run side by side.
+    struct Stream;
+    Stream * stream_begin();
+    bool stream_decode(Stream * stream, const int32_t * codes, int32_t n_frames, int32_t n_threads,
+                       std::vector<float> & audio_out);
+    void stream_end(Stream * stream);
+
     int32_t sample_rate()     const { return sample_rate_; }
     int32_t hop_length()      const { return hop_length_; }
     int32_t num_codebooks()   const { return num_codebooks_; }
@@ -49,6 +58,7 @@ public:
     Impl * impl_ = nullptr;
 
 private:
+    std::mutex mutex_; // one encode, decode or cache reset at a time: requests run side by side
 
     int32_t sample_rate_    = 44100;
     int32_t hop_length_     = 512;
