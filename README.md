@@ -29,24 +29,22 @@ Why the engine looks the way it does, including the rejected experiments and the
 
 ## Model variants
 
-GGUF files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face.
-VRAM notes in this table were re-tested after fixing the duplicate weight load path that had previously inflated GPU memory usage.
-The `~5 GB VRAM` note below refers to model-weight memory after that fix; full runtime usage is higher once the KV cache, codec, and backend overhead are included.
+GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face. **This fork has only been run with the two variants marked below.** The others are upstream's published files: they are expected to work, but nobody here has run them, so they are unverified.
 
-| File | Size | Notes |
+| File | Size | Status in this fork |
 |---|---|---|
-| `s2-pro-f16.gguf` | 9.9 GB | Full precision — reference quality |
-| `s2-pro-q8_0.gguf` | 5.6 GB | Near-lossless — model weights use ~5 GB VRAM after the duplicate-load fix; full runtime usage is higher |
-| `s2-pro-q6_k.gguf` | 4.5 GB | Good quality/size balance — recommended for 6+ GB VRAM |
-| `s2-pro-q5_k_m.gguf` | 4.0 GB | Smaller with still-good quality |
-| `s2-pro-q4_k_m.gguf` | 3.6 GB | Best compact variant so far in quick RU validation |
-| `s2-pro-q3_k.gguf` | 3.0 GB | Usable, but starts stretching short words |
-| `s2-pro-q2_k.gguf` | 2.6 GB | Lowest-size experimental variant |
+| `s2-pro-q4_k_m.gguf` | 3.6 GB | **verified — the working model.** Full 8-test CLI stream runs, ASR round-trip, determinism. ~4.3 GB VRAM steady, ~1.0 GB RSS, peak ~8.7 GB while encoding a 40 s reference |
+| `s2-pro-q8_0.gguf` | 5.6 GB | **verified on the server path.** Full 8-test server suite (profile + raw), TTFA matrix, ASR round-trip. Heavier than q4_k_m |
+| `s2-pro-f16.gguf` | 9.9 GB | upstream, not run here |
+| `s2-pro-q6_k.gguf` | 4.5 GB | upstream, not run here |
+| `s2-pro-q5_k_m.gguf` | 4.0 GB | upstream, not run here |
+| `s2-pro-q3_k.gguf` | 3.0 GB | upstream, not run here |
+| `s2-pro-q2_k.gguf` | 2.6 GB | upstream, not run here |
 
 All variants include both the transformer weights and the audio codec in a single file.
-The quantized variants above were regenerated with the codec tensors (`c.*`) kept in `F16`, so only the AR transformer is quantized.
+The quantized variants keep the codec tensors (`c.*`) in `F16`, so only the AR transformer is quantized.
 
-On CUDA builds, `s2.cpp` keeps the embedding tables on CPU in the hybrid offload path. This avoids unsupported CUDA `get_rows` cases for K-quant embedding tensors (`q2_k`, `q3_k`, `q4_k`, `q5_k`, `q6_k`) and avoids the unstable voice-cloning prefill behavior seen when those lookups were pushed to CUDA. Transformer layers, Fast-AR, and the KV cache can still be offloaded according to `--gpu-layers`. On Vulkan and Metal, full-model offload keeps the entire model on GPU and automatically splits the weights across multiple backend buffers when the driver imposes a per-buffer allocation limit.
+On CUDA builds, `s2.cpp` keeps the embedding tables on CPU in the hybrid offload path. This avoids unsupported CUDA `get_rows` cases for K-quant embedding tensors (`q2_k`, `q3_k`, `q4_k`, `q5_k`, `q6_k`) and avoids the unstable voice-cloning prefill behavior seen when those lookups were pushed to CUDA. Transformer layers, Fast-AR, and the KV cache can still be offloaded according to `--gpu-layers`. (The Vulkan/Metal multi-buffer split described upstream is unverified in this fork.)
 
 ---
 
@@ -73,7 +71,7 @@ A model needs roughly 4.3 GB of VRAM steady (q4_k_m); encoding a 40 s reference 
 - CMake ≥ 3.14
 - C++17 compiler (GCC ≥ 10, Clang ≥ 11, MSVC 2019+)
 - For Vulkan GPU support: Vulkan SDK and `glslc`
-- For CUDA/NVIDIA GPU support: CUDA Toolkit ≥ 12.4
+- For CUDA/NVIDIA GPU support: CUDA Toolkit ≥ 12.4 (13.2 tested here)
 - For Metal/macOS GPU support: Xcode Command Line Tools
   - **MSVC 2019+ note:** MSVC 2019 and later require CUDA ≥ 12.4 when building GGML. Older CUDA versions will produce compiler compatibility errors; upgrade to 12.4+ to resolve them.
 
@@ -225,7 +223,7 @@ Example: realtime Python playback on Linux through the exported library API, usi
 LD_LIBRARY_PATH=build-vulkan:build-vulkan/ggml/src \
 python3 examples/python/ctypes_export_api.py \
   --library build-vulkan/libs2.so \
-  --model /path/to/ggufs-s2/s2-pro-q2_K.gguf \
+  --model /path/to/s2-pro-q4_k_m.gguf \
   --tokenizer /path/to/ggufs-s2/tokenizer.json \
   --backend vulkan \
   --gpu-device 0 \
@@ -262,11 +260,11 @@ Go CGo example: [`examples/golang`](examples/golang) mirrors the C# example with
 
 ## Usage
 
-### Basic synthesis (CPU)
+### Basic synthesis (CPU, unverified in this fork)
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q6_k.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --text "The quick brown fox jumps over the lazy dog." \
   --output output.wav
@@ -280,7 +278,7 @@ Provide a short reference clip (5–30 seconds, WAV or MP3) and a transcript of 
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q6_k.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --prompt-audio reference.wav \
   --prompt-text "Transcript of what the reference speaker says." \
@@ -300,7 +298,7 @@ Save a profile while cloning:
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q6_k.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --prompt-audio reference.wav \
   --prompt-text "Transcript of what the reference speaker says." \
@@ -314,7 +312,7 @@ Reuse a saved profile later without passing reference audio again:
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q6_k.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --voice alice \
   --text "Another sentence in the same voice." \
@@ -330,11 +328,11 @@ List the saved profiles:
 Profiles are stored in `./voices` by default. Override that location with `--voice-dir`.
 For example, `--voice alice --save-voice` writes `./voices/alice.s2voice` by default.
 
-### GPU inference via Vulkan (AMD/Intel)
+### GPU inference via Vulkan (AMD/Intel, unverified in this fork)
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q6_k.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --text "Text to synthesize." \
   --vulkan 0 \
@@ -342,13 +340,13 @@ For example, `--voice alice --save-voice` writes `./voices/alice.s2voice` by def
 ```
 
 `--vulkan 0` selects the first Vulkan device.
-When `--gpu-layers` covers all 36 transformer layers, Vulkan keeps the full model on GPU. If the Vulkan driver rejects a single monolithic allocation, `s2.cpp` splits the model weights across multiple GPU buffers automatically. This avoids per-buffer allocation failures, but it does not reduce the total VRAM requirement.
+When `--gpu-layers` covers all 36 transformer layers, Vulkan keeps the full model on GPU. If the Vulkan driver rejects a single monolithic allocation, `s2.cpp` splits the model weights across multiple GPU buffers automatically. This avoids per-buffer allocation failures, but it does not reduce the total VRAM requirement. (Vulkan is unverified in this fork.)
 
 ### GPU inference via CUDA (NVIDIA)
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q8_0.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --text "Text to synthesize." \
   --cuda 0 \
@@ -358,11 +356,11 @@ When `--gpu-layers` covers all 36 transformer layers, Vulkan keeps the full mode
 `--cuda 0` selects the first CUDA device. By default, both the transformer and the audio codec follow the selected backend. If codec GPU initialization or weight allocation fails, `s2.cpp` logs the failure and falls back to CPU for the codec. Use `--codec-cpu` if you want to keep the codec on CPU explicitly.
 For stability, embedding lookups remain on CPU in the current CUDA hybrid path, while the transformer layers, Fast-AR path, and KV cache still follow the selected `--gpu-layers` split.
 
-### GPU inference via Metal (macOS / Apple GPU)
+### GPU inference via Metal (macOS / Apple GPU, unverified)
 
 ```bash
 ./build/s2 \
-  --model s2-pro-q8_0.gguf \
+  --model s2-pro-q4_k_m.gguf \
   --tokenizer tokenizer.json \
   --text "Text to synthesize." \
   --metal \
@@ -420,9 +418,9 @@ Setting `--min-tokens-before-end 0` matches the upstream fish-speech behavior. N
 Start the server:
 
 ```bash
-./build/s2 --model s2-pro-q6_k.gguf --server
+./build/s2 --model s2-pro-q4_k_m.gguf --server
 # or with custom host/port:
-./build/s2 --model s2-pro-q6_k.gguf --server --host 0.0.0.0 --port 8080
+./build/s2 --model s2-pro-q4_k_m.gguf --server --host 0.0.0.0 --port 8080
 ```
 
 An OpenAPI 3.1 description of the server lives at `openapi/s2-openapi.yaml`.
@@ -522,40 +520,44 @@ curl -X POST http://127.0.0.1:3030/generate \
 
 ## Choosing a model
 
-| VRAM available | Recommended model | Notes |
-|---|---|---|
-| ≥ 10 GB | `q8_0` — near-lossless quality | All 36 layers + codec on GPU |
-| 8–9 GB | `q6_k` — good quality/size balance | All 36 layers on GPU, codec on GPU |
-| 6–7 GB | `q4_k_m` — best compact variant | Use `--gpu-layers 18` to split layers between GPU and CPU; or `--codec-cpu` to keep codec off GPU |
-| < 6 GB | `q4_k_m` or smaller | Requires partial offload: `--gpu-layers 10` or lower + `--codec-cpu` |
+Only `q4_k_m` and `q8_0` have been run by this fork (see [Model variants](#model-variants)). The recommendations below are based on measurements with `q4_k_m`; anything outside the tested row is unverified.
+
+| VRAM available | What was verified here |
+|---|---|
+| 16 GB | `q4_k_m` fully on GPU, including a 40 s reference (peak ~8.7 GB). This is the tested configuration |
+| 10–15 GB | `q4_k_m` on GPU should fit, but the 40 s reference peak leaves little headroom; a 12 s reference peaks ~5.4 GB and changes the voice. Not tested |
+| 8–9 GB | would need a shorter reference or offload; not tested |
+| < 8 GB | needs partial offload (`--gpu-layers N`) and/or `--codec-cpu`; not tested |
 
 ### Understanding VRAM usage
 
-Runtime VRAM usage is significantly higher than the model file size. For example, `s2-pro-q4_k_m.gguf` (3.6 GB on disk) uses approximately **7.2 GB VRAM** with all layers on GPU. The breakdown:
+Measured with `q4_k_m` on a 16 GB RTX 4080 SUPER after warm-up (8-test run):
 
 | Component | Approx. size | Details |
 |---|---|---|
-| AR transformer weights | ~2.8 GB | Quantized (Q4_K_M) |
-| Codec weights | ~0.4 GB | Kept in F16 |
-| KV cache (K + V) | ~2.5 GB | F16, pre-allocated for 32 768 tokens × 36 layers × 8 KV heads |
-| Compute buffers + overhead | ~1.5 GB | Graph workspaces, alignment, temporary contexts |
+| AR transformer weights | 2.38 GB | Q4_K_M, on GPU |
+| Codec weights | 0.78 GB | F16, on GPU |
+| KV cache (K + V) | 0.17–0.33 GB | F16, sized to prompt + `--max-tokens`, rounded up to a multiple of 256 |
+| Compute buffers + overhead | ~0.9 GB | graph workspaces, contexts |
+| **Steady total** | **~4.3 GB** | process RSS ~1.0 GB |
+| Peak while encoding a 40 s reference | ~8.7 GB | the reference encoder is the peak, not generation |
+| Peak with a 12 s reference | ~5.0–5.4 GB | lower, but the cloned voice is audibly worse (rejected) |
 
-The **KV cache** is the largest overhead beyond the model weights. It is always fully allocated on GPU when any layer is offloaded (`--gpu-layers > 0`), regardless of how many layers you choose.
-The Vulkan multi-buffer loader only removes single-allocation limits; cards with 6 GB VRAM still generally need partial offload and/or `--codec-cpu`.
+The KV cache is allocated on GPU whenever any layer is offloaded (`--gpu-layers > 0`), and its size follows the request (`prompt + max_new_tokens`), not a fixed 32k context.
 
-### Reducing VRAM usage
+`q8_0` was verified on the server path and is heavier; it was not profiled in the same way.
 
-If VRAM is tight, use `--gpu-layers` to offload only some of the 36 transformer layers to GPU — the remaining layers run on CPU:
+### Reducing VRAM usage (unverified)
+
+If VRAM is tight, `--gpu-layers` offloads only some of the 36 transformer layers and `--codec-cpu` keeps the codec on the CPU. Neither combination was benchmarked in this fork; the CPU codec itself is verified to work (see [DECISIONS.md](DECISIONS.md)).
 
 ```bash
-# Example: 18 layers on GPU, 18 on CPU (fits in ~5 GB VRAM with q4_k_m)
+# Example: 18 layers on GPU, 18 on CPU — not tested here
 ./build/s2 --model s2-pro-q4_k_m.gguf --cuda 0 --gpu-layers 18 --text "Hello" --output out.wav
 
-# Example: very limited VRAM — 10 layers on GPU, codec on CPU
+# Example: codec on CPU — codec verified, full combination not benchmarked
 ./build/s2 --model s2-pro-q4_k_m.gguf --cuda 0 --gpu-layers 10 --codec-cpu --text "Hello" --output out.wav
 ```
-
-Fewer GPU layers means more work on CPU (slower), but dramatically lower VRAM usage. The KV cache (~2.5 GB) still goes to GPU as long as `--gpu-layers > 0`.
 
 ---
 
