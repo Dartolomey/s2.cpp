@@ -35,7 +35,7 @@ GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodri
 
 | File | Size | Status in this fork |
 |---|---|---|
-| `s2-pro-q4_k_m.gguf` | 3.6 GB | **verified — the working model.** Full 8-test CLI stream runs, ASR round-trip, determinism. ~4.3 GB VRAM steady, ~1.0 GB RSS, peak ~8.7 GB while encoding a 40 s reference |
+| `s2-pro-q4_k_m.gguf` | 3.6 GB | **verified — the working model.** Full 8-test CLI stream runs, ASR round-trip, determinism. ~4.3 GB VRAM steady, ~1.0 GB RSS, peak ~7.0 GB while encoding a 40 s reference |
 | `s2-pro-q8_0.gguf` | 5.6 GB | **verified on the server path.** Full 8-test server suite (profile + raw), TTFA matrix, ASR round-trip. Heavier than q4_k_m |
 | `s2-pro-f16.gguf` | 9.9 GB | upstream, not run here |
 | `s2-pro-q6_k.gguf` | 4.5 GB | upstream, not run here |
@@ -62,7 +62,7 @@ What this fork has actually been built and run on:
 | Linux (CMake) | not built or run here |
 | Vulkan / Metal | not built or run here |
 
-A model needs roughly 4.3 GB of VRAM steady (q4_k_m); encoding a 40 s reference peaks around 8.7 GB, so 12 GB and up is comfortable. A 12 s reference lowers the peak to about 5.4 GB but audibly changes the voice (rejected here).
+A model needs roughly 4.3 GB of VRAM steady (q4_k_m); encoding a 40 s reference peaks around 7.0 GB, so 10 GB and up is comfortable. A shorter reference lowers the peak further, but the 12 s reference we tried audibly changed the voice and was rejected.
 
 ---
 
@@ -526,8 +526,8 @@ Only `q4_k_m` and `q8_0` have been run by this fork (see [Model variants](#model
 
 | VRAM available | What was verified here |
 |---|---|
-| 16 GB | `q4_k_m` fully on GPU, including a 40 s reference (peak ~8.7 GB). This is the tested configuration |
-| 10–15 GB | `q4_k_m` on GPU should fit, but the 40 s reference peak leaves little headroom; a 12 s reference peaks ~5.4 GB and changes the voice. Not tested |
+| 16 GB | `q4_k_m` fully on GPU, including a 40 s reference (peak ~7.0 GB). This is the tested configuration |
+| 10–15 GB | `q4_k_m` on GPU with a 40 s reference (peak ~7.0 GB) should fit; not tested |
 | 8–9 GB | would need a shorter reference or offload; not tested |
 | < 8 GB | needs partial offload (`--gpu-layers N`) and/or `--codec-cpu`; not tested |
 
@@ -542,8 +542,8 @@ Measured with `q4_k_m` on a 16 GB RTX 4080 SUPER after warm-up (8-test run):
 | KV cache (K + V) | 0.17–0.33 GB | F16, sized to prompt + `--max-tokens`, rounded up to a multiple of 256 |
 | Compute buffers + overhead | ~0.9 GB | graph workspaces, contexts |
 | **Steady total** | **~4.3 GB** | process RSS ~1.0 GB |
-| Peak while encoding a 40 s reference | ~8.7 GB | the reference encoder is the peak, not generation |
-| Peak with a 12 s reference | ~5.0–5.4 GB | lower, but the cloned voice is audibly worse (rejected) |
+| Peak while encoding a 40 s reference | ~7.0 GB | the reference encoder is the peak, not generation |
+| Peak with a 12 s reference | lower (not re-measured) | the 12 s reference was rejected for voice quality, not memory |
 
 The KV cache is allocated on GPU whenever any layer is offloaded (`--gpu-layers > 0`), and its size follows the request (`prompt + max_new_tokens`), not a fixed 32k context.
 
@@ -595,10 +595,10 @@ Measured on one machine (RTX 4080 SUPER 16 GB, Windows 11, CUDA 13.2), same mode
 
 | | upstream `2c33261` | this fork |
 |---|---:|---:|
-| RTF, 35 s utterance (q4_k_m) | 2.97 | **0.31** |
-| RTF, 5 s utterance (q4_k_m) | 0.86 | **0.38** |
+| RTF, 35 s utterance (q4_k_m) | 2.97 | **0.30** |
+| RTF, 5 s utterance (q4_k_m) | 0.86 | **0.35–0.38** |
 | TTFA, profile, `buffer0` (q8_0) | 2.9–6.9 s | **0.12–0.14 s** |
-| TTFA, raw reference (q8_0) | 4.1–7.8 s | **1.03–1.15 s** |
+| TTFA, raw reference (q8_0) | 4.1–7.8 s | **0.96–1.03 s** |
 | VRAM, voice profile (q4_k_m) | 6.5 GB | **4.3 GB** |
 | Peak RAM | 1.25 GB | **1.15 GB** |
 

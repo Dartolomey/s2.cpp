@@ -202,6 +202,7 @@ Verified after the revert:
 - full 8 tests: WER 0.0015 (was 0.0374), RTF 0.295–0.377 (no regression);
 - raw-reference peak 6.99 GB (was 8.66), `ref_encode` 814–828 ms (was 946–980).
 The legacy ops are used only by the encoder (the decoder keeps the fast path). Commit `c362001`.
+Merged into the working branch as `7c97c5b` and re-measured: full run `runs/v084-merged-full` (RTF 0.298–0.378, WER 0.0015), TTFA `runs/v085-merged-ttfa` (profile 0.123–0.140 s, raw 0.957–1.027 s), memory (profile path 4.35 GB, raw 7.00 GB, WS 1.14–1.17 GB). `PERFORMANCE.md` and README updated with the new peak (7.0 GB instead of 8.7).
 
 
 
