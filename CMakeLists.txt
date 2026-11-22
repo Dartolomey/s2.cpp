@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(s2cpp LANGUAGES C CXX)
+project(s2cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 if (WIN32)
     add_definitions(-DWIN32_LEAN_AND_MEAN)
@@ -106,6 +106,8 @@ target_include_directories(${target_name} PRIVATE
 )
 
 target_link_libraries(${target_name} PRIVATE ggml)
+
+target_compile_definitions(${target_name} PRIVATE S2_VERSION="${PROJECT_VERSION}")
 
 if(S2_VULKAN)
     target_compile_definitions(${target_name} PRIVATE GGML_USE_VULKAN)

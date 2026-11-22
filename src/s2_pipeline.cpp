@@ -1,3 +1,8 @@
+// s2.cpp - Fish Audio S2 Pro local engine.
+// Derived from https://github.com/rodrigomatt/s2.cpp and distributed under the
+// Fish Audio Research License (see LICENSE.md). Commercial use requires a
+// separate license from Fish Audio.
+
 #include "../include/s2_pipeline.h"
 #include "../include/s2_log.h"
 #include <algorithm>

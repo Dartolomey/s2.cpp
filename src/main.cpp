@@ -1,3 +1,8 @@
+// s2.cpp - Fish Audio S2 Pro local engine.
+// Derived from https://github.com/rodrigomatt/s2.cpp and distributed under the
+// Fish Audio Research License (see LICENSE.md). Commercial use requires a
+// separate license from Fish Audio.
+
 #include "../third_party/filesystem.hpp"
 namespace fs = ghc::filesystem;
 #include "s2_log.h"
@@ -9,6 +14,10 @@ namespace fs = ghc::filesystem;
 #include <cstdio>
 #include <string>
 #include <vector>
+
+#ifndef S2_VERSION
+#define S2_VERSION "dev"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -59,6 +68,7 @@ static bool parse_log_level(const std::string& value, s2::LogLevel& out) {
 }
 
 void print_uso() {
+    safe_print("s2 " S2_VERSION " - Fish Audio S2 Pro local TTS engine\n");
     safe_print("Usage: s2 [options]\n");
     safe_print("Options:\n");
     safe_print("  -m, --model        <path>   Path to GGUF model\n");
@@ -99,6 +109,29 @@ void print_uso() {
     safe_print("  -H, --host         <host>   Server host (default: 127.0.0.1)\n");
     safe_print("  -P, --port         <port>   Server port (default: 3030)\n");
     safe_print("  -h, --help                  Show this help\n");
+    safe_print("  --version                   Print the engine version and exit\n");
+}
+
+// ggml logs (CUDA graph capture, backend init, ...) go to stderr through its own
+// callback, which ignores --log-level and spams debug lines on every frame. Route
+// them through our level so a quiet run stays quiet.
+static void ggml_log_bridge(enum ggml_log_level level, const char * text, void * /*user_data*/) {
+    static thread_local s2::LogLevel last = s2::LogLevel::Info;
+    s2::LogLevel mapped = s2::LogLevel::Info;
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: mapped = s2::LogLevel::Debug;   break;
+        case GGML_LOG_LEVEL_INFO:  mapped = s2::LogLevel::Info;    break;
+        case GGML_LOG_LEVEL_WARN:  mapped = s2::LogLevel::Warning; break;
+        case GGML_LOG_LEVEL_ERROR: mapped = s2::LogLevel::Error;   break;
+        case GGML_LOG_LEVEL_CONT:  mapped = last;                  break;
+        case GGML_LOG_LEVEL_NONE:
+        default: return;
+    }
+    last = mapped;
+    if (!s2::log_enabled(mapped)) return;
+    FILE * out = (mapped == s2::LogLevel::Error || mapped == s2::LogLevel::Warning) ? stderr : stdout;
+    fputs(text, out);
+    fflush(out);
 }
 
 int main(int argc, char** argv) {
@@ -225,7 +258,13 @@ int main(int argc, char** argv) {
         else if (arg == "-H" || arg == "--host") { if (i+1 < argc) serverParams.host = argv[++i]; }
         else if (arg == "-P" || arg == "--port") { if (i+1 < argc) { try { serverParams.port = std::stoi(argv[++i]); } catch(...) {} } }
         else if (arg == "-h" || arg == "--help") { print_uso(); return 0; }
+        else if (arg == "--version") { safe_print("s2 " S2_VERSION "\n"); return 0; }
+        else {
+            safe_print_error("Warning: unknown option '" + arg + "' (see --help).\n");
+        }
     }
+
+    ggml_log_set(ggml_log_bridge, nullptr);
 
     if (list_voices) {
         std::vector<std::string> voice_ids;

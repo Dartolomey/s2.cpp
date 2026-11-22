@@ -1,9 +1,9 @@
 # s2.cpp
 
 > **ALPHA — EXPERIMENTAL SOFTWARE**
-> This is an early-stage, community-built inference engine. Expect rough edges, missing features, and breaking changes. Not production-ready.
+> This is an early-stage inference engine. Expect rough edges and breaking changes. Not production-ready.
 
-**s2.cpp** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan, CUDA, and Metal GPU backends. No Python runtime required after build.
+**s2.cpp 0.1.0** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan, CUDA, and Metal GPU backends. No Python runtime required after build.
 
 > **Built on Fish Audio S2 Pro**
 > The model weights are licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
@@ -79,43 +79,52 @@ No Python or PyTorch required. The executable and optional library targets link 
 
 ## Building
 
-Clone with submodules (ggml is a submodule):
+The engine is a fork of [rodrigomatta/s2.cpp](https://github.com/rodrigomatta/s2.cpp); the upstream history is kept, so clone it with `ggml` as a submodule:
 
 ```bash
-git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git
+git clone --recurse-submodules <this fork's URL>
 cd s2.cpp
 ```
 
-### CPU only
+`ggml` is pinned to an exact commit in the submodule, and the optional fixes in `patches/` are applied automatically at configure time (configure fails if a patch no longer applies, so a clean clone always builds the same tree).
+
+### Windows + CUDA (the configuration this fork is developed on)
+
+```powershell
+.\build.ps1 -Architectures 89     # 89 = Ada (RTX 40xx); use 86/80 for older cards, 90 for H100
+```
+
+`build.ps1` finds `vcvars64.bat`, configures CMake + Ninja, builds into `build\`, and then makes the folder self-contained: it copies the `ggml` DLLs, the CUDA runtime pieces (`cublas64_*.dll`, `cublasLt64_*.dll`) and the MSVC runtime next to `s2.exe`, and finally starts `s2.exe --version` with a minimal `PATH` to prove nothing is missing. If that smoke test fails, the build stops instead of producing a binary that would die silently with `0xC0000135` on another machine.
+
+`-CpuOnly` builds without CUDA (no CUDA/cuBLAS DLLs are copied).
+
+### Linux
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
 ```
 
-### With Vulkan GPU support (AMD/Intel)
+### GPU backends
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_VULKAN=ON
-cmake --build build --parallel $(nproc)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_VULKAN=ON   # AMD/Intel
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON     # NVIDIA
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_METAL=ON    # Apple
 ```
 
-### With CUDA GPU support (NVIDIA)
+The binary is produced at `build/s2` (`build\s2.exe` on Windows).
 
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON
-cmake --build build --parallel $(nproc)
-```
+### Runtime dependencies
 
-### With Metal GPU support (macOS / Apple GPU)
+| Component | Where it comes from |
+|---|---|
+| `ggml*.dll` | built by this project, copied by `build.ps1` |
+| `cublas64_*.dll`, `cublasLt64_*.dll` | CUDA toolkit, copied by `build.ps1` |
+| `msvcp140*.dll`, `vcruntime140*.dll`, `concrt140.dll` | MSVC redistributable, copied by `build.ps1` |
+| NVIDIA driver | required at run time for the CUDA backend |
 
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_METAL=ON
-cmake --build build --parallel $(sysctl -n hw.ncpu)
-```
-
-The binary is produced at `build/s2`.
-During configure, `CMakeLists.txt` also applies any optional local patches found under `patches/` to the bundled `ggml` submodule.
+Without `build.ps1`, make sure these DLLs are next to the executable or on `PATH`; a missing one makes the process exit with `0xC0000135` and no message of its own.
 
 ### Shared/static library targets
 
@@ -375,6 +384,8 @@ For stability, embedding lookups remain on CPU in the current CUDA hybrid path, 
 | `--server` | — | Start HTTP server instead of CLI synthesis |
 | `-H`, `--host` | `127.0.0.1` | Server bind address |
 | `-P`, `--port` | `3030` | Server port |
+| `-h`, `--help` | — | Show help (includes the engine version) |
+| `--version` | — | Print the engine version and exit |
 
 Setting `--min-tokens-before-end 0` matches the upstream fish-speech behavior. Non-zero values deliberately bias the model away from early `EOS`.
 
@@ -583,6 +594,19 @@ Full license: [LICENSE.md](LICENSE.md)
 Commercial licensing: [https://fish.audio](https://fish.audio) · [business@fish.audio](mailto:business@fish.audio)
 
 The inference engine source code (`src/`) is a Derivative Work of the Fish Audio Materials as defined in the Agreement and is distributed under the same Fish Audio Research License terms.
+
+### Third-party components
+
+| Component | License | Used for |
+|---|---|---|
+| [ggml](https://github.com/ggml-org/ggml) | MIT | tensor library and CPU/CUDA/Vulkan/Metal backends |
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) (`third_party/httplib.h`) | MIT | HTTP server |
+| [nlohmann/json](https://github.com/nlohmann/json) (`third_party/json.hpp`) | MIT | server request parsing |
+| [ghc::filesystem](https://github.com/gulrak/filesystem) (`third_party/filesystem.hpp`) | MIT | `<filesystem>` for older toolchains |
+| [dr_wav](https://github.com/mackron/dr_libs) (`third_party/dr_wav.h`) | Public domain / MIT-0 | WAV loading and writing |
+| [dr_mp3](https://github.com/mackron/dr_libs) (`third_party/dr_mp3.h`) | Public domain / MIT-0 | MP3 reference loading |
+
+Each header keeps its own copyright and license notice at the top of the file. The `ggml` submodule is unmodified except for the fixes in `patches/`, which are applied at build time.
 
 ---
 
