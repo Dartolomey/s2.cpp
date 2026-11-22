@@ -91,7 +91,8 @@ cd s2.cpp
 ### Windows + CUDA (the configuration this fork is developed on)
 
 ```powershell
-.\build.ps1 -Architectures 89     # 89 = Ada (RTX 40xx); use 86/80 for older cards, 90 for H100
+.\build.ps1                      # detects the local GPU's SM (89 on RTX 40xx)
+.\build.ps1 -Architectures 86    # force one instead (86 = Ampere, 90 = Hopper)
 ```
 
 `build.ps1` finds `vcvars64.bat`, configures CMake + Ninja, builds into `build\`, and then makes the folder self-contained: it copies the `ggml` DLLs, the CUDA runtime pieces (`cublas64_*.dll`, `cublasLt64_*.dll`) and the MSVC runtime next to `s2.exe`, and finally starts `s2.exe --version` with a minimal `PATH` to prove nothing is missing. If that smoke test fails, the build stops instead of producing a binary that would die silently with `0xC0000135` on another machine.

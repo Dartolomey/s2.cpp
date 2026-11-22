@@ -452,6 +452,15 @@ namespace s2
     bool Server::serve(const ServerParams& params)
     {
         httplib::Server svr;
+#ifdef _WIN32
+        // Without SO_EXCLUSIVEADDRUSE Windows lets a second instance bind a port that
+        // is already in use, so a restart silently leaves two servers answering.
+        svr.set_socket_options([](auto sock) {
+            int one = 1;
+            setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char *>(&one), sizeof(one));
+        });
+#endif
         auto server_busy = std::make_shared<std::atomic<bool>>(false);
 
         auto pipeline = std::make_shared<s2::Pipeline>();
@@ -903,7 +912,8 @@ namespace s2
         S2_LOG_INFO_STREAM("Server starting on http://" << params.host << ":" << params.port << "..." << std::endl);
 
         if (!svr.listen(params.host.c_str(), params.port)) {
-            std::cerr << "Server not initialized." << std::endl;
+            std::cerr << "Server failed to listen on " << params.host << ":" << params.port
+                      << " (is the port already in use?)." << std::endl;
             return 0;
         }
 

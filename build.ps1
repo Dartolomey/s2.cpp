@@ -1,7 +1,7 @@
 # Windows build helper for the CUDA fast path.
 #
-#   .\build.ps1                      # CUDA, SM 89 (RTX 40xx/30xx class), Release
-#   .\build.ps1 -Architectures 90    # H100
+#   .\build.ps1                      # CUDA, architecture detected from the local GPU
+#   .\build.ps1 -Architectures 90    # force an SM (e.g. 90 for H100)
 #   .\build.ps1 -CpuOnly             # CPU-only build (fast path disabled)
 #
 # CMake must see MSVC's environment (rc.exe/mt.exe), so configure+build run from
@@ -9,7 +9,7 @@
 
 param(
     [switch]$CpuOnly,
-    [string]$Architectures = "89",
+    [string]$Architectures = "auto",
     [string]$BuildDir = "build",
     [string]$VcVars = ""
 )
@@ -40,6 +40,21 @@ if (-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)) {
 }
 
 if (-not $CpuOnly) {
+    # A binary built for the wrong SM fails at run time with "no kernel image is
+    # available" only when the GPU backend is first used. Detect the local card.
+    if ($Architectures -eq "auto") {
+        $cap = $null
+        if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+            $cap = (& nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>$null | Select-Object -First 1)
+        }
+        if ($cap -and $cap -match '^\s*(\d+)\.(\d+)\s*$') {
+            $Architectures = "$($matches[1])$($matches[2])"
+            Write-Host "CUDA architecture: $Architectures (detected)"
+        } else {
+            $Architectures = "89"
+            Write-Host "CUDA architecture: 89 (default; pass -Architectures to override)"
+        }
+    }
     $defines = "-DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$Architectures -DGGML_CUDA_GRAPHS=ON"
 } else {
     $defines = "-DCMAKE_BUILD_TYPE=Release -DS2_CUDA=OFF"

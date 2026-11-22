@@ -75,6 +75,9 @@ endif()
     if(_already_applied EQUAL 0)
         message(STATUS "Local patch already applied: ${_patch}")
     else()
-        message(FATAL_ERROR "Local patch is not applicable: ${_patch}")
+        message(FATAL_ERROR
+            "Local patch is not applicable: ${_patch}\n"
+            "If this is a fresh clone, initialize the submodules first:\n"
+            "  git submodule update --init --recursive")
     endif()
 endforeach()
