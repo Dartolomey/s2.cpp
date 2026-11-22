@@ -6,6 +6,7 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
+#include <unordered_map>
 #ifdef GGML_USE_VULKAN
 #include "ggml-vulkan.h"
 #endif
@@ -175,6 +176,16 @@ private:
     ggml_tensor * fast_embeddings_gpu_ = nullptr;
     bool ensure_fast_embeddings_gpu(int32_t n_threads);
     void free_fast_embeddings_gpu();
+    // Norm weights are stored F16. Casting them inside the graph costs a kernel per
+    // norm per replay and blocks the backend's RMS_NORM+MUL fusion, so each one is
+    // converted to F32 once and reused (a few hundred KB in total).
+    ggml_context * ctx_norm_f32_ = nullptr;
+    std::vector<ggml_backend_buffer_t> norm_f32_bufs_;
+    std::unordered_map<const ggml_tensor *, ggml_tensor *> norm_f32_;
+    ggml_tensor * norm_weight_f32(ggml_tensor * w);
+    void free_norm_f32();
+    ggml_tensor * rms_norm_weighted(ggml_context * ctx, ggml_tensor * x,
+                                    ggml_tensor * weight, float eps);
     ggml_context * refill_ctx_ = nullptr;
     ggml_cgraph * refill_gf_ = nullptr;
     ggml_tensor * refill_hidden_ = nullptr;

@@ -43,14 +43,59 @@ static bool backend_requires_single_token_semantic_prefill(ggml_backend_t backen
     return false;
 }
 
-static ggml_tensor * rms_norm_weighted(ggml_context * ctx, ggml_tensor * x,
-                                       ggml_tensor * weight, float eps) {
-    ggml_tensor * cur = ggml_rms_norm(ctx, x, eps);
-    ggml_tensor * w = weight;
-    if (w->type != cur->type) {
-        w = ggml_cast(ctx, w, cur->type);
+ggml_tensor * SlowARModel::norm_weight_f32(ggml_tensor * w) {
+    if (!w) return nullptr;
+    if (w->type == GGML_TYPE_F32) return w;
+    if (w->type != GGML_TYPE_F16) return nullptr;
+
+    auto it = norm_f32_.find(w);
+    if (it != norm_f32_.end()) return it->second;
+
+    ggml_backend_t backend = backend_gpu_ ? backend_gpu_ : backend_cpu_;
+    if (!backend) return nullptr;
+
+    if (!ctx_norm_f32_) {
+        ggml_init_params p = { 1024 * ggml_tensor_overhead(), nullptr, true };
+        ctx_norm_f32_ = ggml_init(p);
+        if (!ctx_norm_f32_) return nullptr;
     }
-    w = repeat_checked(ctx, w, cur, "repeat:rms_norm");
+
+    const int64_t n = ggml_nelements(w);
+    ggml_tensor * dst = ggml_new_tensor_1d(ctx_norm_f32_, GGML_TYPE_F32, n);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_buffer(backend, ggml_nbytes(dst));
+    if (!buf) return nullptr;
+    ggml_backend_tensor_alloc(buf, dst, ggml_backend_buffer_get_base(buf));
+    ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    norm_f32_bufs_.push_back(buf);
+
+    std::vector<ggml_fp16_t> h(static_cast<size_t>(n));
+    ggml_backend_tensor_get(w, h.data(), 0, h.size() * sizeof(ggml_fp16_t));
+    std::vector<float> f(h.size());
+    for (size_t i = 0; i < h.size(); ++i) f[i] = ggml_fp16_to_fp32(h[i]);
+    ggml_backend_tensor_set(dst, f.data(), 0, f.size() * sizeof(float));
+
+    norm_f32_[w] = dst;
+    return dst;
+}
+
+void SlowARModel::free_norm_f32() {
+    for (ggml_backend_buffer_t b : norm_f32_bufs_) ggml_backend_buffer_free(b);
+    norm_f32_bufs_.clear();
+    norm_f32_.clear();
+    if (ctx_norm_f32_) ggml_free(ctx_norm_f32_);
+    ctx_norm_f32_ = nullptr;
+}
+
+// ggml_mul broadcasts a 1-D weight over the rows, and the CUDA backend folds the
+// multiply into the RMS_NORM kernel when the weight is F32 and applied directly.
+ggml_tensor * SlowARModel::rms_norm_weighted(ggml_context * ctx, ggml_tensor * x,
+                                             ggml_tensor * weight, float eps) {
+    ggml_tensor * cur = ggml_rms_norm(ctx, x, eps);
+    ggml_tensor * w = norm_weight_f32(weight);
+    if (!w) {
+        w = (weight->type == cur->type) ? weight : ggml_cast(ctx, weight, cur->type);
+        w = repeat_checked(ctx, w, cur, "repeat:rms_norm");
+    }
     return ggml_mul(ctx, cur, w);
 }
 
@@ -193,6 +238,7 @@ SlowARModel::~SlowARModel() {
     free_embeddings_window();
     free_fast_embeddings_gpu();
     free_refill_graph();
+    free_norm_f32();
 
     if (fast_sched_)     ggml_backend_sched_free(fast_sched_);
     if (sched_)          ggml_backend_sched_free(sched_);
@@ -1256,12 +1302,11 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
 
     if (codebook_sum != nullptr) {
 
-        codebook_sum = ggml_mul(ctx0, codebook_sum,
-                                ggml_repeat(ctx0, semantic_mask, codebook_sum));
+        codebook_sum = ggml_mul(ctx0, codebook_sum, semantic_mask);
         x = ggml_add(ctx0, x, codebook_sum);
     }
     if (token_scale != nullptr) {
-        x = ggml_mul(ctx0, x, ggml_repeat(ctx0, token_scale, x));
+        x = ggml_mul(ctx0, x, token_scale);
     }
 
     for (int32_t il = 0; il < hparams_.block_count; ++il) {
