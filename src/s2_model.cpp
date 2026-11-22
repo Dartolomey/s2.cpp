@@ -769,6 +769,11 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t gpu_device, Backen
 }
 
 bool SlowARModel::init_kv_cache(int32_t max_seq_len) {
+    // Round the cache length up to the flash-attention key stride (256). That
+    // kernel's GQA path, where four query heads share one KV head's reads, only
+    // engages when the key count is a multiple of the stride. The extra rows are
+    // always masked out, so this only changes which kernel is used.
+    max_seq_len = (max_seq_len + 255) / 256 * 256;
     // Reuse a KV buffer that is large enough: a new allocation per request leaks
     // VRAM in the server and adds a large cudaMalloc to every request.
     if (kv_buf_ && ctx_kv_ && max_seq_len_ >= max_seq_len) {
