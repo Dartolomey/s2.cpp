@@ -206,3 +206,10 @@ Two more silent failures:
 - **CUDA architecture defaulted to 89.** A binary built for the wrong SM only fails when CUDA is first used ("no kernel image is available"). `build.ps1` now detects the SM with `nvidia-smi`; `-Architectures` remains for manual selection. Commit `f916993`.
 
 Full run after all changes: `runs/v074-release-final`, RTF 0.309–0.397, all 8 WAVs byte-identical to `runs/v062-recheck`.
+
+### Verified configuration and reference preparation
+- README now states which configuration is actually verified: Windows + CUDA (Ada, SM 89) only. Linux, CPU-only, Vulkan and Metal are marked unverified rather than advertised; the CPU codec path is fixed and checked, but no full CPU-only run was done.
+- Added `--prepare-voice`: encode the reference and save the `.s2voice` profile, then exit without synthesizing. It is the separate reference-preparation step the server needs — a request that loads a profile skips the encode entirely (TTFA profile 0.13 s vs raw 1.0–1.1 s). Verified: 879 frames and codes identical to the baseline profile; only a trailing newline in the transcript passed with `-Raw` differed, so the file hash differed.
+- Tokenizer note: `tokenizer.json` is a separate 13 MB file (the GGUF has only `vocab_size` and the audio pad id). A pruned model must ship a tokenizer whose ids match its vocabulary; the engine takes the path explicitly (`-t`) and looks up the special tokens by string, but the semantic range comes from the GGUF metadata, so both files must belong to the same model.
+Commit `da925a8`.
+
