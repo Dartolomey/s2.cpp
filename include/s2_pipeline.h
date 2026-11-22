@@ -90,6 +90,11 @@ public:
                                                 int32_t T_prompt, StreamingSink & sink);
     bool synthesize_streaming_file(const PipelineParams & params);
 
+    // Encode the reference audio and save it as a voice profile, without
+    // synthesizing anything. Lets a server start with the reference already
+    // prepared (TTFA without the encode).
+    bool prepare_voice(const PipelineParams & params);
+
 private:
     Tokenizer& tokenizer() { return *tokenizer_ref_; }
     const Tokenizer& tokenizer() const { return *tokenizer_ref_; }

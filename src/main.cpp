@@ -78,6 +78,7 @@ void print_uso() {
     safe_print("  -pt, --prompt-text <text>   Text of the reference audio\n");
     safe_print("  --voice            <id>     Load a saved voice profile\n");
     safe_print("  --save-voice                Save the encoded reference as a voice profile\n");
+    safe_print("  --prepare-voice             Encode the reference and save the profile, then exit (no synthesis)\n");
     safe_print("  --voice-dir        <path>   Directory used for saved voice profiles\n");
     safe_print("  --list-voices               List available saved voice profiles and exit\n");
     safe_print("  -o, --output       <path>   Output WAV path\n");
@@ -184,6 +185,7 @@ int main(int argc, char** argv) {
 
     bool use_server = false;
     bool list_voices = false;
+    bool prepare_voice = false;
     s2::ServerParams serverParams;
 
     for (int i = 1; i < argc; ++i) {
@@ -195,6 +197,7 @@ int main(int argc, char** argv) {
         else if (arg == "-pt" || arg == "--prompt-text")  { if (i+1 < argc) params.prompt_text        = argv[++i]; }
         else if (arg == "--voice")                        { if (i+1 < argc) params.voice_id           = argv[++i]; }
         else if (arg == "--save-voice")                   { params.save_voice = true; }
+        else if (arg == "--prepare-voice")                { prepare_voice = true; }
         else if (arg == "--voice-dir")                    { if (i+1 < argc) params.voice_storage_dir  = argv[++i]; }
         else if (arg == "--list-voices")                  { list_voices = true; }
         else if (arg == "-o"  || arg == "--output")       { if (i+1 < argc) params.output_path        = argv[++i]; }
@@ -361,6 +364,14 @@ int main(int argc, char** argv) {
     if (!pipeline.init(params)) {
         safe_print_error("Pipeline initialization failed.\n");
         return 1;
+    }
+
+    if (prepare_voice) {
+        if (!pipeline.prepare_voice(params)) {
+            safe_print_error("Preparing the voice profile failed.\n");
+            return 1;
+        }
+        return 0;
     }
 
     // File output always goes through the streaming path: it writes each chunk as

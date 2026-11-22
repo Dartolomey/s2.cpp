@@ -3,7 +3,9 @@
 > **ALPHA — EXPERIMENTAL SOFTWARE**
 > This is an early-stage inference engine. Expect rough edges and breaking changes. Not production-ready.
 
-**s2.cpp 0.1.0** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan, CUDA, and Metal GPU backends. No Python runtime required after build.
+**s2.cpp 0.1.0** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan, CUDA, and Metal backends. No Python runtime required after build.
+
+> **Verified configuration:** this fork is developed and tested on **Windows + NVIDIA CUDA (Ada, SM 89)** only. The Linux, CPU-only, Vulkan and Metal paths come from upstream and are **not verified here** — they may build and run, but do not treat them as supported until someone tests them. See [Verified configuration](#verified-configuration).
 
 > **Built on Fish Audio S2 Pro**
 > The model weights are licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
@@ -45,6 +47,22 @@ All variants include both the transformer weights and the audio codec in a singl
 The quantized variants above were regenerated with the codec tensors (`c.*`) kept in `F16`, so only the AR transformer is quantized.
 
 On CUDA builds, `s2.cpp` keeps the embedding tables on CPU in the hybrid offload path. This avoids unsupported CUDA `get_rows` cases for K-quant embedding tensors (`q2_k`, `q3_k`, `q4_k`, `q5_k`, `q6_k`) and avoids the unstable voice-cloning prefill behavior seen when those lookups were pushed to CUDA. Transformer layers, Fast-AR, and the KV cache can still be offloaded according to `--gpu-layers`. On Vulkan and Metal, full-model offload keeps the entire model on GPU and automatically splits the weights across multiple backend buffers when the driver imposes a per-buffer allocation limit.
+
+---
+
+## Verified configuration
+
+What this fork has actually been built and run on:
+
+| Configuration | Status |
+|---|---|
+| Windows 11, MSVC 19.4x, CUDA 13.2, RTX 4080 SUPER (SM 89, 16 GB) | **tested** — full 8-test run, server, TTFA, WER |
+| Windows + CUDA, other Turing/Ampere/Ada/Hopper/Blackwell cards | expected to work (`build.ps1` detects the SM); not run here |
+| Windows, CPU-only | codec path fixed and checked, but no full CPU-only run was done |
+| Linux (CMake) | not built or run here |
+| Vulkan / Metal | not built or run here |
+
+A model needs roughly 4.3 GB of VRAM steady (q4_k_m); encoding a 40 s reference peaks around 8.7 GB, so 12 GB and up is comfortable. A 12 s reference lowers the peak to about 5.4 GB but audibly changes the voice (rejected here).
 
 ---
 
@@ -101,18 +119,20 @@ cd s2.cpp
 
 `-CpuOnly` builds without CUDA (no CUDA/cuBLAS DLLs are copied).
 
-### Linux
+### Linux (unverified)
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
 ```
 
-### GPU backends
+### Other GPU backends (unverified)
+
+Only `S2_CUDA` is verified in this fork.
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_VULKAN=ON   # AMD/Intel
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON     # NVIDIA
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON     # NVIDIA (verified)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_METAL=ON    # Apple
 ```
 
@@ -362,6 +382,7 @@ For stability, embedding lookups remain on CPU in the current CUDA hybrid path, 
 | `-pt`, `--prompt-text` | — | Transcript of the reference audio |
 | `--voice` | — | Load a saved `.s2voice` profile |
 | `--save-voice` | off | Save the encoded reference audio as the profile named by `--voice` |
+| `--prepare-voice` | off | Encode the reference and save the profile, then exit without synthesizing (needs `--prompt-audio`, `--prompt-text`, `--voice`) |
 | `--voice-dir` | `./voices` | Directory used to load and save voice profiles |
 | `--list-voices` | — | List available saved voice profiles and exit |
 | `-o`, `--output` | `out.wav` | Output WAV file path |

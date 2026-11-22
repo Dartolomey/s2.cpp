@@ -782,6 +782,43 @@ bool Pipeline::synthesize_with_prompt_codes(const PipelineParams & params, const
     return synthesize_prompt_codes_locked(params, ref_codes, T_prompt, audio_out, 0.0);
 }
 
+bool Pipeline::prepare_voice(const PipelineParams & params) {
+    std::lock_guard<std::mutex> lock(synthesize_mutex_);
+    if (!initialized_) {
+        safe_print_error_ln("Pipeline not initialized.");
+        return false;
+    }
+    if (params.prompt_audio_path.empty() || params.prompt_text.empty() || params.voice_id.empty()) {
+        safe_print_error_ln("Pipeline error: --prepare-voice requires --prompt-audio, --prompt-text and --voice.");
+        return false;
+    }
+
+    AudioData ref_audio;
+    safe_print_ln("Loading reference audio: " + params.prompt_audio_path);
+    if (!load_audio(params.prompt_audio_path, ref_audio, codec().sample_rate()) ||
+        ref_audio.samples.empty()) {
+        safe_print_error_ln("Pipeline error: could not load reference audio " + params.prompt_audio_path);
+        return false;
+    }
+
+    std::vector<int32_t> ref_codes;
+    int32_t T_prompt = 0;
+    double ref_encode_ms = 0.0;
+    std::string effective_prompt_text = params.prompt_text;
+    if (!resolve_reference_prompt_locked(params, ref_audio, ref_codes, T_prompt,
+                                         effective_prompt_text, ref_encode_ms)) {
+        return false;
+    }
+    if (ref_codes.empty() || T_prompt <= 0) {
+        safe_print_error_ln("Pipeline error: reference encoding produced no frames.");
+        return false;
+    }
+    safe_print_ln("[Pipeline] Reference encoded in " + std::to_string(ref_encode_ms) + " ms, " +
+                  std::to_string(T_prompt) + " frames");
+    return save_voice_profile_locked(params.voice_id, ref_codes, T_prompt,
+                                     effective_prompt_text, params);
+}
+
 bool Pipeline::resolve_prompt_reference(const PipelineParams & params, AudioData & ref_audio,
                                         std::vector<int32_t> & ref_codes, int32_t & T_prompt,
                                         std::string & effective_prompt_text, double & ref_encode_ms) {
