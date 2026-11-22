@@ -128,6 +128,11 @@ public:
     bool step(const std::vector<int32_t> & flat_tokens, int32_t n_threads,
               StepResult & result);
 
+    bool export_kv_prefix(int32_t n_prefix, std::vector<uint8_t> & out) const;
+    bool import_kv_prefix(const std::vector<uint8_t> & in, int32_t n_prefix);
+    void set_n_past(int32_t n) { n_past_ = n; }
+    int32_t n_past() const { return n_past_; }
+
     bool fast_decode(const std::vector<float> & hidden,
                      const std::vector<int32_t> & prefix_codes,
                      int32_t n_threads,

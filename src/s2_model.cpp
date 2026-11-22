@@ -815,24 +815,62 @@ void SlowARModel::invalidate_cached_graphs() {
 }
 
 void SlowARModel::clear_kv_cache() {
-    invalidate_cached_graphs();
-
-    if (kv_buf_) {
-        ggml_backend_buffer_free(kv_buf_);
-        kv_buf_ = nullptr;
-    }
-
-    if (ctx_kv_) {
-        ggml_free(ctx_kv_);
-        ctx_kv_ = nullptr;
-    }
-
-    memory_k_ = nullptr;
-    memory_v_ = nullptr;
-
-    max_seq_len_ = 0;
+    // Keep the buffer: the next request reuses it (init_kv_cache only reallocates
+    // when a larger sequence is requested). Stale rows past n_past_ are never read.
     n_past_ = 0;
 }
+
+// The KV cache is laid out as {head_dim, seq, n_head_kv, n_layer}: the prefix is
+// the first n_prefix rows of every (layer, kv-head) block, so it is exported as
+// [layer][kv_head][n_prefix][head_dim] for K and then for V.
+bool SlowARModel::export_kv_prefix(int32_t n_prefix, std::vector<uint8_t> & out) const {
+    if (!memory_k_ || !memory_v_ || !kv_buf_) return false;
+    if (n_prefix <= 0 || n_prefix > max_seq_len_) return false;
+
+    const int32_t n_layer = static_cast<int32_t>(memory_k_->ne[3]);
+    const int32_t n_kv    = static_cast<int32_t>(memory_k_->ne[2]);
+    const size_t  chunk   = static_cast<size_t>(n_prefix) * memory_k_->nb[1];
+    const size_t  per_t   = static_cast<size_t>(n_layer) * n_kv * chunk;
+
+    out.resize(2 * per_t);
+    size_t pos = 0;
+    for (const ggml_tensor * t : { memory_k_, memory_v_ }) {
+        for (int32_t l = 0; l < n_layer; ++l) {
+            for (int32_t h = 0; h < n_kv; ++h) {
+                const size_t off = static_cast<size_t>(l) * t->nb[3] +
+                                   static_cast<size_t>(h) * t->nb[2];
+                ggml_backend_tensor_get(t, out.data() + pos, off, chunk);
+                pos += chunk;
+            }
+        }
+    }
+    return true;
+}
+
+bool SlowARModel::import_kv_prefix(const std::vector<uint8_t> & in, int32_t n_prefix) {
+    if (!memory_k_ || !memory_v_ || !kv_buf_) return false;
+    if (n_prefix <= 0 || n_prefix > max_seq_len_) return false;
+
+    const int32_t n_layer = static_cast<int32_t>(memory_k_->ne[3]);
+    const int32_t n_kv    = static_cast<int32_t>(memory_k_->ne[2]);
+    const size_t  chunk   = static_cast<size_t>(n_prefix) * memory_k_->nb[1];
+    const size_t  per_t   = static_cast<size_t>(n_layer) * n_kv * chunk;
+    if (in.size() != 2 * per_t) return false;
+
+    size_t pos = 0;
+    for (ggml_tensor * t : { memory_k_, memory_v_ }) {
+        for (int32_t l = 0; l < n_layer; ++l) {
+            for (int32_t h = 0; h < n_kv; ++h) {
+                const size_t off = static_cast<size_t>(l) * t->nb[3] +
+                                   static_cast<size_t>(h) * t->nb[2];
+                ggml_backend_tensor_set(t, in.data() + pos, off, chunk);
+                pos += chunk;
+            }
+        }
+    }
+    return true;
+}
+
 bool SlowARModel::prefill_fast(const std::vector<int32_t> & flat_tokens, int32_t n_tokens,
                           int32_t n_threads, StepResult & result) {
     return eval_cached(flat_tokens, n_tokens, n_threads, result);
@@ -1030,6 +1068,13 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         std::fprintf(stderr, "[eval_cached] KV cache overflow (%d + %d > %d)\n",
             n_past_, n_tokens, max_seq_len_);
         return false;
+    }
+
+    // A prefill rebuilds (and resets) the scheduler below, which releases the
+    // buffers of any cached decode graph. Drop that graph so the next decode
+    // rebuilds it instead of writing into freed buffers.
+    if (n_tokens > 1 && slow_gf_ != nullptr) {
+        invalidate_cached_graphs();
     }
 
     const int32_t dim       = hparams_.embedding_length;

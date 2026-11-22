@@ -8,7 +8,8 @@ PromptTensor build_prompt(
     const std::string & prompt_text,
     const int32_t * prompt_codes,
     int32_t num_codebooks,
-    int32_t T_prompt
+    int32_t T_prompt,
+    int32_t * prefix_cols
 ) {
     PromptTensor result;
     result.rows = num_codebooks + 1;
@@ -72,6 +73,9 @@ PromptTensor build_prompt(
     }
 
     int32_t total_len = (int32_t)sys_pre.size() + (has_reference ? T_prompt : 0) + (int32_t)sys_post.size();
+    if (prefix_cols) {
+        *prefix_cols = has_reference ? (int32_t)sys_pre.size() + T_prompt : 0;
+    }
     result.cols = total_len;
 
     result.data.assign(static_cast<size_t>(result.rows) * total_len, 0);

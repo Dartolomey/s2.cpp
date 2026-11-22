@@ -573,6 +573,10 @@ namespace s2
                             voice_value = j["voice"].get<std::string>();
                         }
 
+                        if (j.contains("prefix_kv_cache")) {
+                            pipelineParams.prefix_kv_cache = j["prefix_kv_cache"].get<bool>();
+                        }
+
                         if (j.contains("voice_id")) {
                             voice_value = j["voice_id"].get<std::string>();
                         }

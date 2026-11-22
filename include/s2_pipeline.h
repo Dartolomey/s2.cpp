@@ -51,6 +51,10 @@ struct PipelineParams {
     std::string voice_id;
     bool save_voice = false;
     std::string voice_storage_dir = "./voices";
+    // Reuse the reference prompt's KV across requests of the same voice: a cached
+    // request prefills only the user text. Off by default because splitting the
+    // prefill changes the GEMM shapes and therefore the sampled audio.
+    bool prefix_kv_cache = false;
 };
 
 class Pipeline {
@@ -115,6 +119,9 @@ private:
     AudioCodec* codec_ref_ = &owned_codec_;
     mutable std::mutex synthesize_mutex_;
     bool initialized_ = false;
+    std::vector<uint8_t> kv_prefix_cache_;
+    int32_t kv_prefix_len_ = 0;
+    std::string kv_prefix_key_;
 };
 
 }

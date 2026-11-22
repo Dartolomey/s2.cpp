@@ -984,6 +984,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
 
     const int32_t num_codebooks = model().hparams().num_codebooks;
     const int32_t sample_rate = codec().sample_rate();
+    int32_t prefix_cols = 0;
 
     uint8_t wav_header[44];
     audio_write_streaming_wav_header(wav_header, sample_rate, 1, 16);
@@ -995,7 +996,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
     PromptTensor prompt = build_prompt(
         tokenizer(), params.text, params.prompt_text,
         ref_codes,
-        num_codebooks, T_prompt);
+        num_codebooks, T_prompt, &prefix_cols);
 
     int32_t max_seq_len = prompt.cols + params.gen.max_new_tokens;
     const auto kv_t0 = std::chrono::steady_clock::now();
@@ -1006,6 +1007,41 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
         return false;
     }
     const auto kv_t1 = std::chrono::steady_clock::now();
+
+    // Prefill the fixed head (system prompt + reference codes) once per voice and
+    // reuse its KV for later requests: cached requests only prefill the user text.
+    PromptTensor gen_prompt = prompt;
+    const std::string prefix_key = params.voice_id + "\x1f" + params.prompt_text;
+    const bool prefix_enabled = params.prefix_kv_cache && !params.voice_id.empty() &&
+                                prefix_cols > 0 && prefix_cols < prompt.cols;
+    bool prefix_cache_hit = false;
+    bool prefix_export_pending = false;
+    if (prefix_enabled) {
+        prefix_cache_hit = prefix_key == kv_prefix_key_ &&
+                           kv_prefix_len_ == prefix_cols &&
+                           !kv_prefix_cache_.empty() &&
+                           model().import_kv_prefix(kv_prefix_cache_, prefix_cols);
+        if (prefix_cache_hit) {
+            model().set_n_past(prefix_cols);
+            gen_prompt.rows = prompt.rows;
+            gen_prompt.cols = prompt.cols - prefix_cols;
+            gen_prompt.data.resize(static_cast<size_t>(gen_prompt.rows) * gen_prompt.cols);
+            for (int32_t r = 0; r < prompt.rows; ++r) {
+                for (int32_t t = 0; t < gen_prompt.cols; ++t) {
+                    gen_prompt.data[static_cast<size_t>(r) * gen_prompt.cols + t] =
+                        prompt.data[static_cast<size_t>(r) * prompt.cols + prefix_cols + t];
+                }
+            }
+        } else {
+            // Miss: prefill the whole prompt in one graph (bit-identical to the
+            // uncached path) and export the prefix rows afterwards for later calls.
+            prefix_export_pending = true;
+        }
+        safe_print_ln(std::string("[Pipeline] prefix KV ") +
+                      (prefix_cache_hit ? "hit" : "miss") +
+                      ", prefix=" + std::to_string(prefix_cols) +
+                      ", tail=" + std::to_string(gen_prompt.cols));
+    }
 
     std::vector<std::vector<int32_t>> accumulated_codes_by_cb(num_codebooks);
     for (auto & row : accumulated_codes_by_cb) {
@@ -1118,8 +1154,16 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
     };
 
     const auto gen_t0 = std::chrono::steady_clock::now();
-    GenerateResult res = generate(model(), tokenizer().config(), prompt, gen_params);
+    GenerateResult res = generate(model(), tokenizer().config(), gen_prompt, gen_params);
     const auto gen_t1 = std::chrono::steady_clock::now();
+
+    if (prefix_export_pending) {
+        if (model().export_kv_prefix(prefix_cols, kv_prefix_cache_)) {
+            kv_prefix_key_ = prefix_key;
+            kv_prefix_len_ = prefix_cols;
+        }
+        prefix_export_pending = false;
+    }
 
     if (res.n_frames > 0 && res.n_frames > submitted_frames) {
         submit(res.n_frames);

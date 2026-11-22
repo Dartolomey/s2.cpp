@@ -94,6 +94,7 @@ void print_uso() {
     safe_print("  --stream-file               Write output WAV through the streaming path\n");
     safe_print("  --stream-decode-stride <n>  Decode cadence in frames (0 = auto: server 4, file/offline 16)\n");
     safe_print("  --codec-context-frames <n>  Override codec decode history (lower uses less VRAM, default: auto)\n");
+    safe_print("  --prefix-kv                 Reuse reference-prompt KV between server requests of one voice\n");
     safe_print("  --log-level <level>         error, warn, info, or debug (default: info)\n");
     safe_print("  --server                    Start HTTP server\n");
     safe_print("  -H, --host         <host>   Server host (default: 127.0.0.1)\n");
@@ -212,6 +213,7 @@ int main(int argc, char** argv) {
 #endif
             }
         }
+        else if (arg == "--prefix-kv")        { params.prefix_kv_cache = true; }
         else if (arg == "--log-level") {
             if (i+1 < argc) {
                 s2::LogLevel log_level;
