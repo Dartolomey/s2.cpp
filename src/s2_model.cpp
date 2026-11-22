@@ -192,6 +192,7 @@ SlowARModel::~SlowARModel() {
     free_fast_cache();
     free_embeddings_window();
     free_fast_embeddings_gpu();
+    free_refill_graph();
 
     if (fast_sched_)     ggml_backend_sched_free(fast_sched_);
     if (sched_)          ggml_backend_sched_free(sched_);
@@ -1408,6 +1409,17 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
     return true;
 }
 
+void SlowARModel::free_refill_graph() {
+    if (refill_ctx_) ggml_free(refill_ctx_);
+    refill_ctx_ = nullptr;
+    refill_gf_ = nullptr;
+    refill_hidden_ = nullptr;
+    refill_prefix_ids_ = nullptr;
+    refill_positions_ = nullptr;
+    refill_out_idx_ = nullptr;
+    refill_logits_ = nullptr;
+}
+
 bool SlowARModel::fast_decode_uncached(const std::vector<float> & hidden_in,
                                const std::vector<int32_t> & prefix_tokens,
                                int32_t n_threads,
@@ -1449,6 +1461,24 @@ bool SlowARModel::fast_decode_uncached(const std::vector<float> & hidden_in,
         prefix_id_vals[i] = prefix_tokens[i];
     }
     const int32_t out_pos = static_cast<int32_t>(prefix_tokens.size());
+
+    if (refill_gf_) {
+        ggml_backend_cpu_set_n_threads(backend_cpu_, resolve_n_threads(n_threads));
+        ggml_backend_tensor_set(refill_hidden_, hidden_in.data(), 0,
+                                hidden_in.size() * sizeof(float));
+        ggml_backend_tensor_set(refill_prefix_ids_, prefix_id_vals.data(), 0,
+                                prefix_id_vals.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(refill_out_idx_, &out_pos, 0, sizeof(int32_t));
+        if (ggml_backend_sched_graph_compute(fast_sched_, refill_gf_) != GGML_STATUS_SUCCESS) {
+            std::fprintf(stderr, "[fast_decode] refill compute failed\n");
+            free_refill_graph();
+            return false;
+        }
+        logits_out.resize(hparams_.codebook_size);
+        ggml_backend_tensor_get(refill_logits_, logits_out.data(), 0,
+                                hparams_.codebook_size * sizeof(float));
+        return true;
+    }
 
     if (fast_ctx_size_ == 0) {
         fast_ctx_size_ = 8u * 1024u * 1024u;
@@ -1571,8 +1601,13 @@ bool SlowARModel::fast_decode_uncached(const std::vector<float> & hidden_in,
     logits_out.resize(hparams_.codebook_size);
     ggml_backend_tensor_get(logits, logits_out.data(), 0, hparams_.codebook_size * sizeof(float));
 
-    ggml_backend_sched_reset(fast_sched_);
-    ggml_free(ctx0);
+    refill_ctx_ = ctx0;
+    refill_gf_ = gf;
+    refill_hidden_ = hidden0;
+    refill_prefix_ids_ = prefix_ids;
+    refill_positions_ = positions;
+    refill_out_idx_ = out_idx;
+    refill_logits_ = logits;
     return true;
 }
 
@@ -1794,6 +1829,12 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
         static_cast<int32_t>(hidden_in.size()) != hparams_.embedding_length ||
         static_cast<int32_t>(prefix_tokens.size()) >= hparams_.num_codebooks) {
         return fast_decode_uncached(hidden_in, prefix_tokens, n_threads, logits_out);
+    }
+    if (const char * mode = std::getenv("S2_FASTAR")) {
+        if (std::strcmp(mode, "refill") == 0) {
+            ensure_fast_embeddings_gpu(n_threads);
+            return fast_decode_uncached(hidden_in, prefix_tokens, n_threads, logits_out);
+        }
     }
     ensure_fast_embeddings_gpu(n_threads);
     if (!init_fast_cache()) {

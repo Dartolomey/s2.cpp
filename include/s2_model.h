@@ -170,6 +170,14 @@ private:
     ggml_tensor * fast_embeddings_gpu_ = nullptr;
     bool ensure_fast_embeddings_gpu(int32_t n_threads);
     void free_fast_embeddings_gpu();
+    ggml_context * refill_ctx_ = nullptr;
+    ggml_cgraph * refill_gf_ = nullptr;
+    ggml_tensor * refill_hidden_ = nullptr;
+    ggml_tensor * refill_prefix_ids_ = nullptr;
+    ggml_tensor * refill_positions_ = nullptr;
+    ggml_tensor * refill_out_idx_ = nullptr;
+    ggml_tensor * refill_logits_ = nullptr;
+    void free_refill_graph();
     size_t         ctx_size_   = 0;
     std::vector<uint8_t> ctx_buf_;
     size_t         fast_ctx_size_ = 0;
