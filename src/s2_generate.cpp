@@ -15,6 +15,9 @@ GenerateResult generate(
     const GenerateParams & params
 ) {
     const auto generate_t0 = std::chrono::steady_clock::now();
+    if (params.seed >= 0) {
+        set_sampler_seed(params.seed);
+    }
     GenerateResult out;
     out.num_codebooks = model.hparams().num_codebooks;
     if (out.num_codebooks <= 0) out.num_codebooks = 1;

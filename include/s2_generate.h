@@ -25,6 +25,7 @@ struct GenerateParams {
     float   temperature             = 0.8f;
     float   top_p                   = 0.8f;
     int32_t top_k                   = 30;
+    int64_t seed                    = -1;
     int32_t min_tokens_before_end   = 0;
     int32_t n_threads               = 0;
     bool    verbose                 = true;

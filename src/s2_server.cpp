@@ -546,6 +546,10 @@ namespace s2
                             pipelineParams.gen.top_k = std::max(0, val);
                         }
 
+                        if (j.contains("seed")) {
+                            pipelineParams.gen.seed = j["seed"].get<int64_t>();
+                        }
+
                         if (j.contains("min_tokens_before_end")) {
                             int32_t val = j["min_tokens_before_end"].get<int32_t>();
                             pipelineParams.gen.min_tokens_before_end = std::max(0, val);

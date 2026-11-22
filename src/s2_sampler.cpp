@@ -5,6 +5,19 @@
 
 namespace s2 {
 
+static thread_local std::mt19937 sampler_gen(std::random_device{}());
+
+void set_sampler_seed(int64_t seed) {
+    if (seed < 0) {
+        sampler_gen.seed(std::random_device{}());
+        return;
+    }
+    const uint32_t lo = static_cast<uint32_t>(static_cast<uint64_t>(seed));
+    const uint32_t hi = static_cast<uint32_t>(static_cast<uint64_t>(seed) >> 32);
+    std::seed_seq seq{lo, hi};
+    sampler_gen.seed(seq);
+}
+
 static void apply_softmax(std::vector<float> & probs, float temp = 1.0f) {
     if (probs.empty()) return;
     float max_val = *std::max_element(probs.begin(), probs.end());
@@ -91,10 +104,9 @@ int32_t sample_token(const float * logits, int32_t vocab_size, const SamplerPara
     }
     for (float & p : probs) p /= sum_p;
 
-    thread_local static std::mt19937 gen(std::random_device{}());
     std::discrete_distribution<int32_t> dist(probs.begin(), probs.end());
 
-    const int32_t sampled_idx = dist(gen);
+    const int32_t sampled_idx = dist(sampler_gen);
     return filtered[sampled_idx].second;
 }
 
