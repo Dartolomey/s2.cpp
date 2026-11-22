@@ -186,7 +186,7 @@ private:
     ggml_tensor  * slow_hidden_last_   = nullptr;
     ggml_tensor  * slow_logits_        = nullptr;
     ggml_tensor  * slow_window_ids_t_  = nullptr;
-    std::vector<ggml_tensor *> slow_cb_id_tensors_;
+    ggml_tensor *  slow_cb_ids_ = nullptr;
 
 
     // A reusable Fast-AR graph for a fixed number of new tokens (1 or 2), built once and replayed.

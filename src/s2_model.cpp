@@ -792,7 +792,7 @@ void SlowARModel::invalidate_cached_graphs() {
     slow_hidden_last_  = nullptr;
     slow_logits_       = nullptr;
     slow_window_ids_t_ = nullptr;
-    slow_cb_id_tensors_.clear();
+    slow_cb_ids_ = nullptr;
     if (sched_) ggml_backend_sched_reset(sched_);
 
     if (fast_kv_buf_ || fast_kv_ctx_) free_fast_cache();
@@ -1070,9 +1070,13 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
                                     gpu_window ? window_local_ids.data() : window_ids.data(), 0,
                                     n_window * sizeof(int32_t));
         }
+        std::vector<int32_t> cb_all(static_cast<size_t>(hparams_.num_codebooks) * n_tokens);
         for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
-            ggml_backend_tensor_set(slow_cb_id_tensors_[cb], cb_vals[cb].data(), 0, sizeof(int32_t));
+            std::copy(cb_vals[cb].begin(), cb_vals[cb].end(),
+                      cb_all.begin() + static_cast<size_t>(cb) * n_tokens);
         }
+        ggml_backend_tensor_set(slow_cb_ids_, cb_all.data(), 0,
+                                cb_all.size() * sizeof(int32_t));
 
         if (ggml_backend_sched_graph_compute(sched_, slow_gf_) != GGML_STATUS_SUCCESS) {
             std::fprintf(stderr, "[eval_cached] cached sched compute failed\n");
@@ -1129,13 +1133,16 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
     ggml_tensor * x = ggml_get_rows(ctx0, weights_.embeddings, semantic_ids);
     if (x->type != GGML_TYPE_F32) x = ggml_cast(ctx0, x, GGML_TYPE_F32);
 
-    std::vector<ggml_tensor *> cb_id_tensors(hparams_.num_codebooks);
+    ggml_tensor * codebook_ids = ggml_new_tensor_1d(
+        ctx0, GGML_TYPE_I32, static_cast<int64_t>(hparams_.num_codebooks) * n_tokens);
+    ggml_tensor * emb_all = ggml_get_rows(ctx0, weights_.codebook_embeddings, codebook_ids);
+    if (emb_all->type != GGML_TYPE_F32) emb_all = ggml_cast(ctx0, emb_all, GGML_TYPE_F32);
+
     ggml_tensor * codebook_sum = nullptr;
     for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
-        ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-        cb_id_tensors[cb] = ids;
-        ggml_tensor * emb = ggml_get_rows(ctx0, weights_.codebook_embeddings, ids);
-        if (emb->type != GGML_TYPE_F32) emb = ggml_cast(ctx0, emb, GGML_TYPE_F32);
+        ggml_tensor * emb = ggml_view_2d(
+            ctx0, emb_all, dim, n_tokens, emb_all->nb[1],
+            static_cast<size_t>(cb) * n_tokens * emb_all->nb[1]);
         codebook_sum = (codebook_sum == nullptr) ? emb : ggml_add(ctx0, codebook_sum, emb);
     }
 
@@ -1292,8 +1299,14 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         ggml_backend_tensor_set(attn_mask, attn_mask_vals.data(), 0,
                                 attn_mask_vals.size() * sizeof(ggml_fp16_t));
     }
-    for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
-        ggml_backend_tensor_set(cb_id_tensors[cb], cb_vals[cb].data(), 0, n_tokens * sizeof(int32_t));
+    {
+        std::vector<int32_t> cb_all(static_cast<size_t>(hparams_.num_codebooks) * n_tokens);
+        for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
+            std::copy(cb_vals[cb].begin(), cb_vals[cb].end(),
+                      cb_all.begin() + static_cast<size_t>(cb) * n_tokens);
+        }
+        ggml_backend_tensor_set(codebook_ids, cb_all.data(), 0,
+                                cb_all.size() * sizeof(int32_t));
     }
 
     if (ggml_backend_sched_graph_compute(sched_, gf) != GGML_STATUS_SUCCESS) {
@@ -1324,7 +1337,7 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         slow_hidden_last_   = hidden_last;
         slow_logits_        = logits;
         slow_window_ids_t_  = window_ids_t;
-        slow_cb_id_tensors_ = cb_id_tensors;
+        slow_cb_ids_ = codebook_ids;
     } else {
         ggml_backend_sched_reset(sched_);
         ggml_free(ctx0);
