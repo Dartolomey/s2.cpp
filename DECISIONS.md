@@ -173,6 +173,11 @@ Profiling with `--cuda-graph-trace=node` showed ~1840 kernels per frame before t
 - **KV length rounded up to 256** enables flash attention's GQA path (four query heads per KV head, 4x fewer K/V reads). Long test: slow 7.6 → 6.7 ms/frame, RTF 0.321–0.326 → **0.304**; all 8 tests RTF 0.342–0.427 → **0.305–0.393**. The tensor-core GQA path rounds differently, so samples change: WER 0.047 → **0.0374**, the run is deterministic (`runs/v059-gqa-full`, `runs/wer-gqa.json`). VRAM +up to 37 MB. Commit `857df43`.
 Remaining: decode attention is now ~0.8 ms/frame; prefill (190 ms per request) is unaffected by the padding — there K/V has the exact length n_past+n_tokens and attention is not the bottleneck.
 
+### How close to the hardware limit
+One frame reads 4.63 GB of weights (2.21 GB slow AR + 2.42 GB across the nine fast-AR steps). A pure streaming read on this 4080S reaches ~700 GB/s (measured with `tmp/bw.cu`); the engine's matvec kernels sustain ~570 GB/s, 81% of that ceiling. The matvec floor is therefore ~6.6 ms/frame and the engine spends ~8.1.
+The rest of the frame: attention ~0.8 ms, norms/elementwise ~1.9 ms, sampling ~0.4 ms, codec (worker thread) ~0.3 ms exposed. Prefill runs at ~138 TFLOPS effective (0.1 ms/token), the practical ceiling of ggml's quantized matmul here.
+Measured launch overhead: removing every host sync from the fast-AR loop would save at most ~0.5 ms/frame (~3%). The remaining headroom is bytes per frame, not scheduling.
+
 ### Prefill: measurement and conclusion
 Breakdown (current build, q4_k_m):
 - full prompt 1136 tokens: build+mask 1.4, alloc 1.0–9.1, upload 0.3–3.6, **compute 116–138 ms**;

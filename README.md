@@ -587,6 +587,26 @@ The C++ engine (`src/`) is built on a bundled [ggml](https://github.com/ggml-org
 
 ---
 
+## How close to the hardware limit
+
+One frame reads the model weights twice: ~2.21 GB for the 36-layer slow AR and ~2.42 GB for the nine fast-AR steps, 4.63 GB per frame in total. On the test card (RTX 4080 SUPER, 736 GB/s theoretical) a pure streaming read kernel reaches ~700 GB/s; the quantized matvec kernels sustain ~570 GB/s, i.e. 81% of what the memory system actually delivers. That puts the matvec floor at ~6.6 ms/frame, and the engine spends ~8.1.
+
+Measured budget per frame with `q4_k_m` (1200+ token context):
+
+| Part | ms/frame |
+|---|---|
+| Weight matvecs | 8.1 (~570 GB/s) |
+| Attention | 0.8 |
+| Norms + elementwise | 1.9 |
+| Sampling (CPU) | ~0.4 |
+| Codec (worker thread, exposed part) | ~0.3 |
+
+Prefill runs at ~138 TFLOPS effective (0.1 ms/token for the 4B-parameter model), which is the practical ceiling of ggml's quantized matmul on this GPU.
+
+Launch overhead was measured separately: removing every host sync from the fast-AR loop would save at most ~0.5 ms/frame (~3%), so the remaining headroom is in bytes per frame (quantization), not in scheduling.
+
+---
+
 ## Tips
 
 ### Long outputs
