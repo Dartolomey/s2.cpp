@@ -178,6 +178,14 @@ One frame reads 4.63 GB of weights (2.21 GB slow AR + 2.42 GB across the nine fa
 The rest of the frame: attention ~0.8 ms, norms/elementwise ~1.9 ms, sampling ~0.4 ms, codec (worker thread) ~0.3 ms exposed. Prefill runs at ~138 TFLOPS effective (0.1 ms/token), the practical ceiling of ggml's quantized matmul here.
 Measured launch overhead: removing every host sync from the fast-AR loop would save at most ~0.5 ms/frame (~3%). The remaining headroom is bytes per frame, not scheduling.
 
+### Upstream vs this fork (measured)
+Same machine (RTX 4080 SUPER, Windows 11, CUDA 13.2), same voice profile, same parameters. RTF and memory on q4_k_m, TTFA on q8_0 (the harness default).
+- RTF, 8 tests: upstream 2.971/3.046 on the 35 s tests and ~0.86 on the 3–5 s tests; ours 0.309/0.310 and 0.351–0.397. Speed-up 9.6–9.8x on long utterances, 2.2–2.4x on short ones. Upstream's cost grows with the utterance because its codec re-decodes the growing prefix every chunk; ours is flat.
+- TTFA (8 tests): profile `buffer0` 2.943–6.915 s → 0.122–0.138 s (21–57x); `low_latency` 0.385–0.470 → 0.120–0.139 (2.8–3.9x); `buffer3000` 3.389–15.927 → 1.153–1.370 (2.5–13.8x); raw reference 4.097–7.836 → 1.030–1.146 (3.6–7.6x).
+- Memory: voice-profile path 6.54 GB → 4.34 GB VRAM (-34%), peak WS 1.24 GB → 1.15 GB. The raw-reference path is the one metric where upstream is better: 7.02 GB vs our 8.66 GB, because our chunked encoder peaks higher; the intended deployment encodes the reference once (`--prepare-voice`) and serves every request at ~4.3 GB.
+Runs: upstream `runs/v077-upstream-full`, `runs/v080-upstream-ttfa`; ours `runs/v074-release-final`, `runs/v066-ttfa-nomemset`; harness `bench/mem_breakdown.py`. Full report: `PERFORMANCE.md` (repo) and `runs/COMPARE-upstream-vs-ours.md`.
+
+
 ### Prefill: measurement and conclusion
 Breakdown (current build, q4_k_m):
 - full prompt 1136 tokens: build+mask 1.4, alloc 1.0–9.1, upload 0.3–3.6, **compute 116–138 ms**;
