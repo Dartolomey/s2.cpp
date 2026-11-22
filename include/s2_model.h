@@ -165,6 +165,11 @@ private:
     int32_t        embeddings_window_n_ = 0;
     bool ensure_embeddings_window(const std::vector<int32_t> & ids, int32_t n_threads);
     void free_embeddings_window();
+    ggml_context * ctx_fast_emb_ = nullptr;
+    ggml_backend_buffer_t fast_emb_buf_ = nullptr;
+    ggml_tensor * fast_embeddings_gpu_ = nullptr;
+    bool ensure_fast_embeddings_gpu(int32_t n_threads);
+    void free_fast_embeddings_gpu();
     size_t         ctx_size_   = 0;
     std::vector<uint8_t> ctx_buf_;
     size_t         fast_ctx_size_ = 0;

@@ -191,6 +191,7 @@ SlowARModel::~SlowARModel() {
     invalidate_cached_graphs();
     free_fast_cache();
     free_embeddings_window();
+    free_fast_embeddings_gpu();
 
     if (fast_sched_)     ggml_backend_sched_free(fast_sched_);
     if (sched_)          ggml_backend_sched_free(sched_);
@@ -952,11 +953,59 @@ bool SlowARModel::ensure_embeddings_window(const std::vector<int32_t> & ids, int
     return true;
 }
 
+void SlowARModel::free_fast_embeddings_gpu() {
+    if (fast_emb_buf_) ggml_backend_buffer_free(fast_emb_buf_);
+    if (ctx_fast_emb_) ggml_free(ctx_fast_emb_);
+    fast_emb_buf_ = nullptr;
+    ctx_fast_emb_ = nullptr;
+    fast_embeddings_gpu_ = nullptr;
+}
+
+// The Fast-AR embedding table is read once per codebook step (nine times a
+// frame). Keeping an F32 copy on the GPU removes those CPU gathers and their
+// host/device round-trips; the CPU table stays for the fallback path.
+bool SlowARModel::ensure_fast_embeddings_gpu(int32_t n_threads) {
+    if (fast_embeddings_gpu_) return true;
+    if (!backend_gpu_ || !weights_.fast_embeddings) return false;
+
+    const int32_t dim = hparams_.embedding_length;
+    const int64_t nelem = ggml_nelements(weights_.fast_embeddings);
+    const int32_t n = static_cast<int32_t>(nelem / dim);
+    if (n <= 0) return false;
+
+    ggml_init_params p = { 16ull * 1024 * 1024 + static_cast<size_t>(nelem) * sizeof(float),
+                           nullptr, false };
+    ggml_context * ctx = ggml_init(p);
+    if (!ctx) return false;
+    ggml_tensor * idt = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n);
+    for (int32_t i = 0; i < n; ++i) static_cast<int32_t *>(idt->data)[i] = i;
+    ggml_tensor * rows = ggml_get_rows(ctx, weights_.fast_embeddings, idt);
+    if (!rows) { ggml_free(ctx); return false; }
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, rows);
+    ggml_graph_compute_with_ctx(ctx, gf, resolve_n_threads(n_threads));
+
+    ggml_init_params ep = { 4ull * ggml_tensor_overhead(), nullptr, true };
+    ctx_fast_emb_ = ggml_init(ep);
+    if (!ctx_fast_emb_) { ggml_free(ctx); return false; }
+    fast_embeddings_gpu_ = ggml_new_tensor_2d(ctx_fast_emb_, GGML_TYPE_F32, dim, n);
+    fast_emb_buf_ = ggml_backend_alloc_ctx_tensors(ctx_fast_emb_, backend_gpu_);
+    if (!fast_emb_buf_) {
+        free_fast_embeddings_gpu();
+        ggml_free(ctx);
+        return false;
+    }
+    ggml_backend_buffer_set_usage(fast_emb_buf_, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_tensor_set(fast_embeddings_gpu_, rows->data, 0,
+                            static_cast<size_t>(nelem) * sizeof(float));
+    ggml_free(ctx);
+    return true;
+}
+
 bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
                                int32_t n_tokens, int32_t n_threads,
                                StepResult & result) {
     if (n_tokens <= 0) return false;
-
     const int32_t codebook_dim = hparams_.num_codebooks + 1;
     if (static_cast<int32_t>(flat_tokens.size()) != n_tokens * codebook_dim) {
         std::fprintf(stderr, "[eval_cached] expected %d ints for %d tokens, got %zu\n",
@@ -1412,7 +1461,8 @@ bool SlowARModel::fast_decode_uncached(const std::vector<float> & hidden_in,
     // tokens after. Dummies sit beyond the causal diagonal / are discarded by the runtime
     // output index, so only the real prefix affects the result.
     ggml_tensor * prefix_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens - 1);
-    ggml_tensor * prefix_emb = ggml_get_rows(ctx0, weights_.fast_embeddings, prefix_ids);
+    ggml_tensor * prefix_emb = ggml_get_rows(ctx0,
+        fast_embeddings_gpu_ ? fast_embeddings_gpu_ : weights_.fast_embeddings, prefix_ids);
     if (prefix_emb->type != GGML_TYPE_F32) {
         prefix_emb = ggml_cast(ctx0, prefix_emb, GGML_TYPE_F32);
     }
@@ -1600,7 +1650,7 @@ bool SlowARModel::build_fast_graph(FastGraph & g, int32_t n_tok) {
     g.mask      = input(ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, L, n_tok), "fast_mask");
 
     ggml_tensor * x = ggml_get_rows(ctx0,
-        weights_.fast_embeddings, g.token_ids);
+        fast_embeddings_gpu_ ? fast_embeddings_gpu_ : weights_.fast_embeddings, g.token_ids);
     if (x->type != GGML_TYPE_F32) x = ggml_cast(ctx0, x, GGML_TYPE_F32);
     if (n_tok == 2) {
         g.hidden = input(ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams_.embedding_length, 1), "fast_hidden");
@@ -1729,8 +1779,11 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
                               std::vector<float> & logits_out) {
     if (prefix_tokens.empty() || !hparams_.has_fast_decoder ||
         static_cast<int32_t>(hidden_in.size()) != hparams_.embedding_length ||
-        static_cast<int32_t>(prefix_tokens.size()) >= hparams_.num_codebooks ||
-        !init_fast_cache()) {
+        static_cast<int32_t>(prefix_tokens.size()) >= hparams_.num_codebooks) {
+        return fast_decode_uncached(hidden_in, prefix_tokens, n_threads, logits_out);
+    }
+    ensure_fast_embeddings_gpu(n_threads);
+    if (!init_fast_cache()) {
         return fast_decode_uncached(hidden_in, prefix_tokens, n_threads, logits_out);
     }
 
