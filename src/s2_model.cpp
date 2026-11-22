@@ -722,9 +722,22 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t gpu_device, Backen
 }
 
 bool SlowARModel::init_kv_cache(int32_t max_seq_len) {
+    // Reuse a KV buffer that is large enough: a new allocation per request leaks
+    // VRAM in the server and adds a large cudaMalloc to every request.
+    if (kv_buf_ && ctx_kv_ && max_seq_len_ >= max_seq_len) {
+        n_past_ = 0;
+        ggml_backend_tensor_memset(memory_k_, 0, 0, ggml_nbytes(memory_k_));
+        ggml_backend_tensor_memset(memory_v_, 0, 0, ggml_nbytes(memory_v_));
+        return true;
+    }
+
     // The KV cache tensors (memory_k_/memory_v_) are re-created here, so any cached
     // decode graph that references them is stale.
     invalidate_cached_graphs();
+    if (kv_buf_) { ggml_backend_buffer_free(kv_buf_); kv_buf_ = nullptr; }
+    if (ctx_kv_) { ggml_free(ctx_kv_); ctx_kv_ = nullptr; }
+    memory_k_ = nullptr;
+    memory_v_ = nullptr;
 
     max_seq_len_ = max_seq_len;
     n_past_      = 0;
