@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <limits>
 
 using json = nlohmann::json;
@@ -251,6 +252,18 @@ bool Tokenizer::load(const std::string & path) {
     config_.im_start_id       = token_to_id("<|im_start|>");
     config_.im_end_id         = token_to_id("<|im_end|>");
     config_.voice_id          = token_to_id("<|voice|>");
+
+    // Without this the generator can never stop on EOS and silently runs to
+    // max_tokens. A pruned or custom tokenizer must keep the control tokens.
+    if (config_.im_end_id < 0) {
+        std::cerr << "[s2_tokenizer] tokenizer has no <|im_end|> token; generation could never stop"
+                  << std::endl;
+        return false;
+    }
+    if (config_.voice_id < 0) {
+        std::cerr << "[s2_tokenizer] tokenizer has no <|voice|> token; voice cloning needs it"
+                  << std::endl;
+    }
 
     return true;
 }
