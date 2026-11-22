@@ -16,10 +16,12 @@
 This repository contains:
 
 - **`s2.cpp`** — a self-contained C++17 inference engine built on [ggml](https://github.com/ggml-org/ggml), handling tokenization, Dual-AR generation, audio codec encode/decode, and WAV output with no Python dependency
-- **`tokenizer.json`** — Qwen3 BPE tokenizer with ByteLevel pre-tokenization
+- **`tokenizer.json`** — Qwen3 BPE tokenizer with ByteLevel pre-tokenization. It is loaded as a separate file at run time (the GGUF stores only the vocabulary size, not the vocabulary itself), so `s2.exe` and `tokenizer.json` must travel together
 - GGUF model files are **not included** here — see [Model variants](#model-variants) below
 
 The engine runs the full pipeline: text → tokens → Slow-AR transformer (with KV cache) → Fast-AR codebook decoder → audio codec → WAV file.
+
+Why the engine looks the way it does, including the rejected experiments and their numbers, is written down in [DECISIONS.md](DECISIONS.md).
 
 ---
 
