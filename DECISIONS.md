@@ -185,6 +185,15 @@ Same machine (RTX 4080 SUPER, Windows 11, CUDA 13.2), same voice profile, same p
 - Memory: voice-profile path 6.54 GB → 4.34 GB VRAM (-34%), peak WS 1.24 GB → 1.15 GB. The raw-reference path is the one metric where upstream is better: 7.02 GB vs our 8.66 GB, because our chunked encoder peaks higher; the intended deployment encodes the reference once (`--prepare-voice`) and serves every request at ~4.3 GB.
 Runs: upstream `runs/v077-upstream-full`, `runs/v080-upstream-ttfa`; ours `runs/v074-release-final`, `runs/v066-ttfa-nomemset`; harness `bench/mem_breakdown.py`. Full report: `PERFORMANCE.md` (repo) and `runs/COMPARE-upstream-vs-ours.md`.
 
+### What the stateful codec port did to the voice
+The port replaced the whole codec file (encoder and decoder). Comparing the saved reference profiles (stored codes, no synthesis):
+- v001 (old codec) vs v002 (old codec): 0 of 8,790 codes differ — the old path was deterministic.
+- v002 (old) vs v003 (stateful): 1,322 codes differ (15.0%), 40.2% of frames; per codebook `[29, 45, 98, 105, 105, 129, 169, 198, 211, 233]`.
+- v003 vs v020: 0 differences — the encoder has not changed since, so every later optimization ran on the same reference codes.
+Reading: RVQ codebook 0 carries the coarse timbre and flips in only 29/879 frames (3.3%); differences grow towards the fine residual books. So the port shifted fine texture and touched the coarse envelope occasionally — the same speaker, a slightly different rendering — rather than replacing the voice. The cause is the encoder's new numerics (conv/weight layout, float order): a nearest-neighbour VQ is discontinuous, so a tiny perturbation flips indices even though the encoder logic did not change.
+The decoder itself cannot change the voice: it renders codes. Stateful decode is mathematically the same causal computation as the offline one (carried conv tails and attention KV), differing only in floating-point order; a real bug would show as clicks repeating every chunk (46 ms), which listening and ASR did not show.
+
+
 
 ### Prefill: measurement and conclusion
 Breakdown (current build, q4_k_m):
