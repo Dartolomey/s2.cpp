@@ -602,8 +602,8 @@ Measured on one machine (RTX 4080 SUPER 16 GB, Windows 11, CUDA 13.2), same mode
 | VRAM, voice profile (q4_k_m) | 6.5 GB | **4.3 GB** |
 | Peak RAM | 1.25 GB | **1.15 GB** |
 
-The short-utterance RTF gain (~2.3x) comes from flash attention, CUDA graphs, the
-stateful codec and the Fast-AR KV cache. The long-utterance gain (~9.6x) adds the
+The short-utterance RTF gain (~2.3-2.5x) comes from flash attention, CUDA graphs, the
+stateful codec and the Fast-AR KV cache. The long-utterance gain (~10x) adds the
 removal of upstream's growing-prefix re-decode. With a prepared profile, the
 system is a real-time streaming engine for a live agent: first audio in ~0.12 s,
 then 0.3–0.4× real time.
