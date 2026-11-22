@@ -190,6 +190,7 @@ SlowARModel::~SlowARModel() {
     // tensor pointers into them) and before ctx_buf_/fast_ctx_buf_ are destroyed.
     invalidate_cached_graphs();
     free_fast_cache();
+    free_embeddings_window();
 
     if (fast_sched_)     ggml_backend_sched_free(fast_sched_);
     if (sched_)          ggml_backend_sched_free(sched_);
@@ -889,6 +890,68 @@ bool SlowARModel::step(const std::vector<int32_t> & flat_tokens, int32_t n_threa
     return eval_cached(flat_tokens, 1, n_threads, result);
 }
 
+void SlowARModel::free_embeddings_window() {
+    if (embed_buf_) ggml_backend_buffer_free(embed_buf_);
+    if (ctx_embed_) ggml_free(ctx_embed_);
+    embed_buf_ = nullptr;
+    ctx_embed_ = nullptr;
+    embeddings_window_ = nullptr;
+    embeddings_window_ids_ = nullptr;
+    embeddings_window_n_ = 0;
+}
+
+// Copy only the sampling-window rows of the tied embedding table to the GPU once.
+// The full table stays on the CPU for text prefill; the logits head then reads the
+// small GPU slice instead of uploading ~40 MB of rows every frame.
+bool SlowARModel::ensure_embeddings_window(const std::vector<int32_t> & ids, int32_t n_threads) {
+    const int32_t n = static_cast<int32_t>(ids.size());
+    if (embeddings_window_ && embeddings_window_n_ == n) return true;
+    free_embeddings_window();
+    if (!backend_gpu_ || !weights_.embeddings || n <= 0) return false;
+
+    const int32_t dim = hparams_.embedding_length;
+    const size_t out_bytes = static_cast<size_t>(dim) * n * sizeof(float);
+    ggml_init_params p = { 16ull * 1024 * 1024 + out_bytes, nullptr, false };
+    ggml_context * ctx = ggml_init(p);
+    if (!ctx) return false;
+
+    ggml_tensor * idt = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n);
+    std::memcpy(idt->data, ids.data(), static_cast<size_t>(n) * sizeof(int32_t));
+    ggml_tensor * rows = ggml_get_rows(ctx, weights_.embeddings, idt);
+    if (!rows) { ggml_free(ctx); return false; }
+
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, rows);
+    ggml_graph_compute_with_ctx(ctx, gf, resolve_n_threads(n_threads));
+
+    ggml_init_params ep = { 4ull * ggml_tensor_overhead(), nullptr, true };
+    ctx_embed_ = ggml_init(ep);
+    if (!ctx_embed_) { ggml_free(ctx); return false; }
+    embeddings_window_ = ggml_new_tensor_2d(ctx_embed_, GGML_TYPE_F16, dim, n);
+    embeddings_window_ids_ = ggml_new_tensor_1d(ctx_embed_, GGML_TYPE_I32, n);
+    embed_buf_ = ggml_backend_alloc_ctx_tensors(ctx_embed_, backend_gpu_);
+    if (!embed_buf_) {
+        free_embeddings_window();
+        ggml_free(ctx);
+        return false;
+    }
+    ggml_backend_buffer_set_usage(embed_buf_, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    std::vector<ggml_fp16_t> h(static_cast<size_t>(dim) * n);
+    ggml_fp32_to_fp16_row(static_cast<const float *>(rows->data), h.data(),
+                          static_cast<int64_t>(dim) * n);
+    ggml_backend_tensor_set(embeddings_window_, h.data(), 0,
+                            h.size() * sizeof(ggml_fp16_t));
+
+    std::vector<int32_t> local(static_cast<size_t>(n));
+    for (int32_t i = 0; i < n; ++i) local[static_cast<size_t>(i)] = i;
+    ggml_backend_tensor_set(embeddings_window_ids_, local.data(), 0,
+                            local.size() * sizeof(int32_t));
+    embeddings_window_n_ = n;
+    ggml_free(ctx);
+    return true;
+}
+
 bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
                                int32_t n_tokens, int32_t n_threads,
                                StepResult & result) {
@@ -974,6 +1037,11 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         return false;
     }
 
+    std::vector<int32_t> window_local_ids(static_cast<size_t>(n_window));
+    for (int32_t i = 0; i < n_window; ++i) window_local_ids[i] = i;
+    const bool gpu_window = backend_gpu_ != nullptr &&
+        ensure_embeddings_window(window_ids, n_threads);
+
     // Decode (n_tokens == 1) causal-mask values. Shape is fixed [max_seq_len_, 1]; the
     // values change each frame as n_past_ advances, so they are re-uploaded each frame.
     std::vector<ggml_fp16_t> attn_mask_vals;
@@ -997,8 +1065,11 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         }
         ggml_backend_tensor_set(slow_attn_mask_, attn_mask_vals.data(), 0,
                                 attn_mask_vals.size() * sizeof(ggml_fp16_t));
-        ggml_backend_tensor_set(slow_window_ids_t_, window_ids.data(), 0,
-                                n_window * sizeof(int32_t));
+        if (slow_window_ids_t_) {
+            ggml_backend_tensor_set(slow_window_ids_t_,
+                                    gpu_window ? window_local_ids.data() : window_ids.data(), 0,
+                                    n_window * sizeof(int32_t));
+        }
         for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
             ggml_backend_tensor_set(slow_cb_id_tensors_[cb], cb_vals[cb].data(), 0, sizeof(int32_t));
         }
@@ -1168,15 +1239,30 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         last_token_view(ctx0, slow_cont, n_tokens),
         ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, dim, 1));
 
-    // Sampling window (semantic range + optional im_end) was already computed above;
-    // window_ids / n_window are constant, so only the window_ids_t input tensor is created.
-    ggml_tensor * window_ids_t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_window);
-    ggml_tensor * logits_emb   = ggml_get_rows(ctx0, weights_.embeddings, window_ids_t);
-    if (logits_emb->type != GGML_TYPE_F32) {
-        logits_emb = ggml_cast(ctx0, logits_emb, GGML_TYPE_F32);
+    // Sampling window rows: on the GPU they are a constant table plus constant
+    // local indices, so the scheduler keeps get_rows on the GPU. Otherwise the
+    // old CPU-table path is used.
+    ggml_tensor * window_ids_t = nullptr;
+    ggml_tensor * logits      = nullptr;
+    if (gpu_window) {
+        // The slice is constant, so no gather is needed: one matmul over the
+        // GPU-resident rows keeps everything on the device.
+        logits = mul_mat_checked(ctx0, embeddings_window_, hidden_last, "mul_mat:logits_window");
+    } else {
+        window_ids_t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_window);
+        ggml_tensor * logits_emb = ggml_get_rows(ctx0, weights_.embeddings, window_ids_t);
+        if (logits_emb->type != GGML_TYPE_F32) {
+            logits_emb = ggml_cast(ctx0, logits_emb, GGML_TYPE_F32);
+        }
+        logits = mul_mat_checked(ctx0, logits_emb, hidden_last, "mul_mat:logits_window");
     }
-    ggml_tensor * logits = mul_mat_checked(ctx0, logits_emb, hidden_last, "mul_mat:logits_window");
     ggml_build_forward_expand(gf, logits);
+    if (gpu_window) {
+        // Both inputs of get_rows live on the GPU; without this the scheduler can
+        // still place the op on the CPU and copy the whole slice back and forth.
+        ggml_backend_sched_set_tensor_backend(sched_, embeddings_window_, backend_gpu_);
+        ggml_backend_sched_set_tensor_backend(sched_, embeddings_window_ids_, backend_gpu_);
+    }
 
     ggml_backend_cpu_set_n_threads(backend_cpu_, resolve_n_threads(n_threads));
     ggml_backend_sched_reset(sched_);
@@ -1194,7 +1280,11 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
     if (n_tokens == 1) {
         ggml_backend_tensor_set(n_past_idx, &n_past_, 0, sizeof(int32_t));
     }
-    ggml_backend_tensor_set(window_ids_t,  window_ids.data(),     0, n_window * sizeof(int32_t));
+    if (window_ids_t) {
+        ggml_backend_tensor_set(window_ids_t,
+                                gpu_window ? window_local_ids.data() : window_ids.data(),
+                                0, n_window * sizeof(int32_t));
+    }
     if (token_scale) {
         ggml_backend_tensor_set(token_scale, token_scale_vals.data(), 0, n_tokens * sizeof(float));
     }

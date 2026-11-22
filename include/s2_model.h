@@ -156,6 +156,15 @@ private:
     int32_t        max_seq_len_ = 0;
     int32_t        n_gpu_layers_ = -1;
     int32_t        n_past_     = 0;
+    // Sampling-window rows of the tied embedding table, kept on the GPU: the logits
+    // head only reads these ~4k rows every frame instead of copying them from the CPU.
+    ggml_context * ctx_embed_ = nullptr;
+    ggml_backend_buffer_t embed_buf_ = nullptr;
+    ggml_tensor * embeddings_window_ = nullptr;
+    ggml_tensor * embeddings_window_ids_ = nullptr;
+    int32_t        embeddings_window_n_ = 0;
+    bool ensure_embeddings_window(const std::vector<int32_t> & ids, int32_t n_threads);
+    void free_embeddings_window();
     size_t         ctx_size_   = 0;
     std::vector<uint8_t> ctx_buf_;
     size_t         fast_ctx_size_ = 0;
