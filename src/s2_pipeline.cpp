@@ -1,11 +1,15 @@
 #include "../include/s2_pipeline.h"
 #include "../include/s2_log.h"
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstdio>
 #include <cmath>
 #include <chrono>
+#include <deque>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <functional>
 #include <thread>
 #include <utility>
@@ -1007,14 +1011,21 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
     for (auto & row : accumulated_codes_by_cb) {
         row.reserve(static_cast<size_t>(params.gen.max_new_tokens));
     }
-    std::vector<int32_t> decode_codes;
+    struct DecodeJob {
+        std::vector<int32_t> codes; // [num_codebooks * n_frames]
+        int32_t n_frames = 0;
+    };
+    std::mutex job_mtx;
+    std::condition_variable job_cv;
+    std::condition_variable space_cv;
+    std::deque<DecodeJob> jobs;
+    bool stopping = false;
+    std::atomic<bool> worker_failed{false};
+    std::atomic<bool> worker_aborted{false};
     size_t emitted_samples = 0;
-    int32_t last_decoded_frames = 0;
-    int32_t committed_frames = 0;
     double stream_decode_ms = 0.0;
     int32_t stream_decode_batches = 0;
-    bool stream_aborted = false;
-    bool stream_failed = false;
+    int32_t submitted_frames = 0;
     const int32_t stream_decode_stride_frames =
         params.stream_decode_stride_frames > 0 ? params.stream_decode_stride_frames : 4;
 
@@ -1030,93 +1041,105 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
         return false;
     }
 
-    auto decode_and_emit = [&](int32_t total_frames) -> bool {
-        const int32_t n = total_frames - committed_frames;
-        if (n <= 0) {
-            return true;
-        }
+    // The codec decodes on its own thread while the AR keeps generating. Chunks are
+    // submitted and decoded in exactly the same order and sizes as the synchronous
+    // path, so the PCM is bit-identical.
+    std::thread codec_worker([&] {
+        std::vector<float> pcm;
+        for (;;) {
+            DecodeJob job;
+            {
+                std::unique_lock<std::mutex> lock(job_mtx);
+                job_cv.wait(lock, [&] { return stopping || !jobs.empty(); });
+                if (jobs.empty() && stopping) return;
+                job = std::move(jobs.front());
+                jobs.pop_front();
+            }
+            space_cv.notify_one();
+            if (worker_failed.load() || worker_aborted.load()) continue;
 
-        decode_codes.resize(static_cast<size_t>(num_codebooks) * n);
+            const auto decode_t0 = std::chrono::steady_clock::now();
+            const bool ok = codec().stream_decode(codec_stream.get(), job.codes.data(),
+                                                  job.n_frames, params.gen.n_threads, pcm);
+            const auto decode_t1 = std::chrono::steady_clock::now();
+            if (!ok) {
+                worker_failed.store(true);
+                sink.on_error("Codec decode failed");
+                continue;
+            }
+            stream_decode_ms += std::chrono::duration<double, std::milli>(decode_t1 - decode_t0).count();
+            stream_decode_batches++;
+            emitted_samples += pcm.size();
+            if (!pcm.empty() && !sink.on_pcm_data(pcm.data(), pcm.size())) {
+                worker_aborted.store(true);
+            }
+        }
+    });
+
+    auto submit = [&](int32_t total_frames) -> bool {
+        const int32_t n = total_frames - submitted_frames;
+        if (n <= 0) return true;
+        DecodeJob job;
+        job.n_frames = n;
+        job.codes.resize(static_cast<size_t>(num_codebooks) * n);
         for (int32_t cb = 0; cb < num_codebooks; ++cb) {
             if (static_cast<int32_t>(accumulated_codes_by_cb[cb].size()) < total_frames) {
                 safe_print_error_ln("Pipeline streaming: internal codebook accumulation underflow.");
                 sink.on_error("Internal streaming codebook accumulation error");
-                stream_failed = true;
                 return false;
             }
             std::copy(
-                accumulated_codes_by_cb[cb].begin() + committed_frames,
+                accumulated_codes_by_cb[cb].begin() + submitted_frames,
                 accumulated_codes_by_cb[cb].begin() + total_frames,
-                decode_codes.begin() + static_cast<size_t>(cb) * n
-            );
+                job.codes.begin() + static_cast<size_t>(cb) * n);
         }
-
-        std::vector<float> pcm;
-        const auto decode_t0 = std::chrono::steady_clock::now();
-        if (!codec().stream_decode(codec_stream.get(), decode_codes.data(), n,
-                                   params.gen.n_threads, pcm)) {
-            safe_print_error_ln("Pipeline streaming: decode failed at frame batch ending " +
-                                std::to_string(total_frames - 1));
-            sink.on_error("Codec decode failed");
-            stream_failed = true;
-            return false;
+        {
+            std::unique_lock<std::mutex> lock(job_mtx);
+            space_cv.wait(lock, [&] { return jobs.size() < 1 || stopping; });
+            jobs.push_back(std::move(job));
         }
-        const auto decode_t1 = std::chrono::steady_clock::now();
-        stream_decode_ms += std::chrono::duration<double, std::milli>(decode_t1 - decode_t0).count();
-        stream_decode_batches++;
-
-        if (!pcm.empty() && !sink.on_pcm_data(pcm.data(), pcm.size())) {
-            stream_aborted = true;
-            return false;
-        }
-        emitted_samples += pcm.size();
-        committed_frames = total_frames;
-        last_decoded_frames = total_frames;
+        job_cv.notify_one();
+        submitted_frames = total_frames;
         return true;
     };
 
     GenerateParams gen_params = params.gen;
     gen_params.on_frame = [&](const FrameCallbackData & fcd) -> bool {
-        if (sink.is_cancelled()) {
-            stream_aborted = true;
+        if (sink.is_cancelled() || worker_failed.load() || worker_aborted.load()) {
             return false;
         }
-
         for (int32_t cb = 0; cb < fcd.num_codebooks; ++cb) {
             accumulated_codes_by_cb[cb].push_back(fcd.codes[cb]);
         }
-
-        if ((fcd.total_frames - last_decoded_frames) < stream_decode_stride_frames) {
+        if ((fcd.total_frames - submitted_frames) < stream_decode_stride_frames) {
             return true;
         }
-        return decode_and_emit(fcd.total_frames);
+        return submit(fcd.total_frames);
     };
 
     const auto gen_t0 = std::chrono::steady_clock::now();
     GenerateResult res = generate(model(), tokenizer().config(), prompt, gen_params);
     const auto gen_t1 = std::chrono::steady_clock::now();
 
+    if (res.n_frames > 0 && res.n_frames > submitted_frames) {
+        submit(res.n_frames);
+    }
+    {
+        std::lock_guard<std::mutex> lock(job_mtx);
+        stopping = true;
+    }
+    job_cv.notify_all();
+    codec_worker.join();
+
     if (res.n_frames == 0) {
-        if (stream_aborted) {
-            model().clear_kv_cache();
-            return false;
-        }
         safe_print_error_ln("Pipeline error: generation produced no frames.");
         sink.on_error("Generation produced no frames");
         model().clear_kv_cache();
         return false;
     }
-
-    if (stream_failed || stream_aborted) {
+    if (worker_failed.load() || worker_aborted.load() || sink.is_cancelled()) {
         model().clear_kv_cache();
         return false;
-    }
-
-    if (res.n_frames > last_decoded_frames || committed_frames < res.n_frames) {
-        if (!decode_and_emit(res.n_frames)) {
-            model().clear_kv_cache();
-            return false;
-        }
     }
 
     sink.on_done();
