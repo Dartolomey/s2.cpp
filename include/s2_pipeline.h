@@ -65,7 +65,6 @@ public:
     bool init(const PipelineParams & params);
     bool init_from_components(Tokenizer* tokenizer, SlowARModel* model, AudioCodec* codec);
     bool is_initialized() const { return initialized_; }
-    bool synthesize(const PipelineParams & params);
 
     bool synthesize_to_memory(const PipelineParams & params, const void * ref_audio_buffer, size_t ref_audio_size, void** wav_buffer, size_t* wav_size);
     bool synthesize_raw(const PipelineParams & params, AudioData & ref_audio, std::vector<float> & audio_out);

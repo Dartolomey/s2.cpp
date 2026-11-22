@@ -644,46 +644,6 @@ bool Pipeline::resolve_reference_prompt_locked(const PipelineParams & params, Au
     return true;
 }
 
-bool Pipeline::synthesize(const PipelineParams & params) {
-    std::vector<float> audio_out;
-    AudioData ref_audio;
-
-    if (!params.prompt_audio_path.empty() && params.prompt_text.empty()) {
-        safe_print_error_ln("Pipeline error: prompt audio was provided without prompt text.");
-        return false;
-    }
-
-    if (!params.prompt_audio_path.empty()) {
-        safe_print_ln("Loading reference audio: " + params.prompt_audio_path);
-        if (!load_audio(params.prompt_audio_path, ref_audio, codec().sample_rate())) {
-            safe_print_warn_ln("Pipeline warning: load_audio failed, running without reference audio.");
-        }
-    }
-
-    if (!this->synthesize_raw(params, ref_audio, audio_out)) {
-        safe_print_error_ln("Pipeline error: synthesis failed.");
-        return false;
-    }
-
-    if (params.trim_silence && !audio_out.empty()) {
-        auto trimmed = audio_trim_trailing_silence(audio_out.data(), audio_out.size(), codec().sample_rate());
-        if (!trimmed.empty()) audio_out = std::move(trimmed);
-    }
-
-    if (params.normalize_dynamic && !audio_out.empty()) {
-        audio_out = audio_normalize_dynamic(audio_out.data(), audio_out.size(), codec().sample_rate());
-    }
-
-    if (!save_audio(params.output_path, audio_out, codec().sample_rate(),
-                    false, params.normalize_output)) {
-        safe_print_error_ln("Pipeline error: save_audio failed to " + params.output_path);
-        return false;
-    }
-
-    safe_print_ln("Saved audio to: " + params.output_path);
-    return true;
-}
-
 bool Pipeline::synthesize_to_memory(const PipelineParams & params, const void * ref_audio_buffer, size_t ref_audio_size, void** wav_buffer, size_t* wav_size) {
     std::vector<float> audio_out;
     AudioData ref_audio;

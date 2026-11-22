@@ -91,8 +91,7 @@ void print_uso() {
     safe_print("  --codec-auto                Benchmark codec backends and keep the fastest\n");
     safe_print("  --codec-follow-backend      Force codec to follow the selected GPU backend (default)\n");
     safe_print("  --codec-cpu                 Force codec on CPU even when model uses GPU\n");
-    safe_print("  --stream-file               Write output WAV through the streaming path\n");
-    safe_print("  --stream-decode-stride <n>  Decode cadence in frames (0 = auto: server 4, file/offline 16)\n");
+    safe_print("  --stream-decode-stride <n>  Decode cadence in frames (0 = auto: 4)\n");
     safe_print("  --codec-context-frames <n>  Override codec decode history (lower uses less VRAM, default: auto)\n");
     safe_print("  --prefix-kv                 Reuse reference-prompt KV between server requests of one voice\n");
     safe_print("  --log-level <level>         error, warn, info, or debug (default: info)\n");
@@ -151,7 +150,6 @@ int main(int argc, char** argv) {
     params.backend_type = s2::BackendType::CPU;
 
     bool use_server = false;
-    bool use_stream_file = false;
     bool list_voices = false;
     s2::ServerParams serverParams;
 
@@ -198,7 +196,6 @@ int main(int argc, char** argv) {
         else if (arg == "--codec-auto")       { params.codec_auto_backend = true;  params.codec_follow_backend = true;  }
         else if (arg == "--codec-follow-backend") { params.codec_auto_backend = false; params.codec_follow_backend = true; }
         else if (arg == "--codec-cpu")        { params.codec_auto_backend = false; params.codec_follow_backend = false; }
-        else if (arg == "--stream-file")      { use_stream_file = true; }
         else if (arg == "--stream-decode-stride") {
             if (i+1 < argc) {
                 try { params.stream_decode_stride_frames = std::stoi(argv[++i]); } catch(...) {}
@@ -327,15 +324,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (use_stream_file) {
-        if (!pipeline.synthesize_streaming_file(params)) {
-            safe_print_error("Synthesis failed.\n");
-            return 1;
-        }
-        return 0;
-    }
-
-    if (!pipeline.synthesize(params)) {
+    // File output always goes through the streaming path: it writes each chunk as
+    // it is decoded and never holds the whole utterance in memory.
+    if (!pipeline.synthesize_streaming_file(params)) {
         safe_print_error("Synthesis failed.\n");
         return 1;
     }

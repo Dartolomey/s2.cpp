@@ -123,9 +123,6 @@ public:
     bool prefill_fast(const std::vector<int32_t> & flat_tokens, int32_t n_tokens,
         int32_t n_threads, StepResult & result);
 
-    bool prefill(const std::vector<int32_t> & flat_tokens, int32_t n_tokens,
-                 int32_t n_threads, StepResult & result);
-
     bool step(const std::vector<int32_t> & flat_tokens, int32_t n_threads,
               StepResult & result);
 
@@ -186,14 +183,6 @@ private:
     void free_norm_f32();
     ggml_tensor * rms_norm_weighted(ggml_context * ctx, ggml_tensor * x,
                                     ggml_tensor * weight, float eps);
-    ggml_context * refill_ctx_ = nullptr;
-    ggml_cgraph * refill_gf_ = nullptr;
-    ggml_tensor * refill_hidden_ = nullptr;
-    ggml_tensor * refill_prefix_ids_ = nullptr;
-    ggml_tensor * refill_positions_ = nullptr;
-    ggml_tensor * refill_out_idx_ = nullptr;
-    ggml_tensor * refill_logits_ = nullptr;
-    void free_refill_graph();
     size_t         ctx_size_   = 0;
     std::vector<uint8_t> ctx_buf_;
     size_t         fast_ctx_size_ = 0;

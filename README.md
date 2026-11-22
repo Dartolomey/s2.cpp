@@ -363,13 +363,14 @@ For stability, embedding lookups remain on CPU in the current CUDA hybrid path, 
 | `--temperature F`, `--temp F`, `-temp F` | `0.8` | Sampling temperature |
 | `--top-p F`, `-top-p F` | `0.8` | Top-p nucleus sampling |
 | `--top-k N`, `-top-k N` | `30` | Top-k sampling |
+| `--seed N` | `-1` (random) | Sampling seed. A fixed value reproduces the same audio for the same text and parameters; random gives variety between runs |
 | `--dynamic-normalize` / `--no-dynamic-normalize` | `disabled` | Enable or disable dynamic RMS normalization |
 | `--trim-silence` / `--no-trim-silence` | `trim` disabled | Enable or disable trailing silence trimming on the saved WAV |
 | `--normalize` / `--no-normalize` | `normalize` disabled | Enable or disable peak normalization to `0.95` on the saved WAV |
-| `--codec-auto` / `--codec-follow-backend` / `--codec-cpu` | `--codec-auto` | `--codec-auto` benchmarks codec backends and keeps the fastest; `--codec-follow-backend` lets the codec follow the selected GPU backend; `--codec-cpu` keeps codec on CPU. If codec GPU init or allocation fails, the runtime falls back to CPU |
+| `--codec-auto` / `--codec-follow-backend` / `--codec-cpu` | `--codec-follow-backend` | `--codec-follow-backend` lets the codec follow the selected GPU backend; `--codec-auto` benchmarks both backends at startup and keeps the fastest (slower start); `--codec-cpu` keeps the codec on CPU. If codec GPU init or allocation fails, the runtime falls back to CPU |
 | `--codec-context-frames <n>` | `auto` | Override codec decode history window. Lower values use less VRAM but may reduce quality |
-| `--stream-file` | — | Write the WAV through the exact streaming path instead of the final one-shot save |
-| `--stream-decode-stride N` | `0` | Decode cadence in frames. `0` = auto (`4` for server streaming, `16` for `--stream-file` and offline synthesis) |
+| `--stream-decode-stride N` | `0` | Decode cadence in frames. `0` = auto (`4`) |
+| `--prefix-kv` | off | Reuse the reference-prompt KV between server requests of one voice (faster TTFA; cache hits draw a different, equally valid sample) |
 | `--log-level LEVEL` | `info` | Runtime log verbosity: `error`, `warn`, `info`, or `debug` |
 | `--server` | — | Start HTTP server instead of CLI synthesis |
 | `-H`, `--host` | `127.0.0.1` | Server bind address |
