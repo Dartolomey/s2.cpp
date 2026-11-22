@@ -61,11 +61,15 @@ int32_t sample_token(const float * logits, int32_t vocab_size, const SamplerPara
         items.push_back({logits[i], i});
     }
 
-    std::sort(items.begin(), items.end(), [](const auto & a, const auto & b) {
-        return a.first > b.first;
-    });
-
     const int32_t k = params.top_k > 0 ? std::min(params.top_k, vocab_size) : vocab_size;
+    if (k < static_cast<int32_t>(items.size())) {
+        std::partial_sort(items.begin(), items.begin() + k, items.end(),
+                          [](const auto & a, const auto & b) { return a.first > b.first; });
+    } else {
+        std::sort(items.begin(), items.end(), [](const auto & a, const auto & b) {
+            return a.first > b.first;
+        });
+    }
     const float top_p = std::clamp(params.top_p, 0.0f, 1.0f);
     const std::vector<float> sorted_probs = softmax_from_sorted_logits(items);
 
