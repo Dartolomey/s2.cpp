@@ -12,7 +12,9 @@
 #include <iostream>
 #include <thread>
 #include <condition_variable>
+#include <chrono>
 #include <deque>
+#include <mutex>
 #include <atomic>
 #include <algorithm>
 #include <cctype>
@@ -22,6 +24,48 @@ using json = nlohmann::json;
 namespace fs = ghc::filesystem;
 
 namespace {
+
+// One synthesis slot. A second request waits for it instead of failing with 503,
+// so overlapping clients (or a harness) queue up rather than dropping work.
+struct RequestGate {
+    enum class Status { Acquired, QueueFull, TimedOut };
+
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool busy = false;
+    int waiting = 0;
+    int max_waiting = 4;
+    int timeout_ms = 60000;
+
+    Status acquire() {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (!busy) {
+            busy = true;
+            return Status::Acquired;
+        }
+        if (waiting >= max_waiting) {
+            return Status::QueueFull;
+        }
+        const int ahead = ++waiting;
+        S2_LOG_WARN_STREAM("[queue] request waiting, " << ahead << " queued" << std::endl);
+        const bool ok = cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                    [this] { return !busy; });
+        --waiting;
+        if (!ok) {
+            return Status::TimedOut;
+        }
+        busy = true;
+        return Status::Acquired;
+    }
+
+    void release() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            busy = false;
+        }
+        cv.notify_one();
+    }
+};
 
 enum class StreamAudioFormat {
     Wav,
@@ -461,7 +505,9 @@ namespace s2
                        reinterpret_cast<const char *>(&one), sizeof(one));
         });
 #endif
-        auto server_busy = std::make_shared<std::atomic<bool>>(false);
+        auto gate = std::make_shared<RequestGate>();
+        gate->max_waiting = params.max_queued_requests;
+        gate->timeout_ms = params.queue_timeout_ms;
 
         auto pipeline = std::make_shared<s2::Pipeline>();
         if (!pipeline->init(params.pipeline))
@@ -496,10 +542,16 @@ namespace s2
                     << " -> " << res.status
                     << " (" << duration << "ms)" << std::endl); });
 
-        svr.Post("/generate", [pipeline, server_busy, &active_threads_mtx, &active_threads, &params](const httplib::Request& req, httplib::Response& res)
+        svr.Post("/generate", [pipeline, gate, &active_threads_mtx, &active_threads, &params](const httplib::Request& req, httplib::Response& res)
             {
 
                 PipelineParams pipelineParams = params.pipeline;
+                // Streaming to a client benefits from a small first chunk: the client
+                // gets sound one frame after the prefill instead of one stride later.
+                // File output keeps the stride (see synthesize_streaming_file).
+                if (pipelineParams.stream_first_chunk_frames <= 0) {
+                    pipelineParams.stream_first_chunk_frames = 1;
+                }
                 bool stream_response = false;
                 bool chunked_response = false;
                 bool low_latency_mode = false;
@@ -609,6 +661,16 @@ namespace s2
                             int32_t val = j["stream_decode_stride"].get<int32_t>();
                             pipelineParams.stream_decode_stride_frames = std::max(0, val);
                             explicit_stream_stride = true;
+                        }
+
+                        if (j.contains("stream_first_chunk_frames")) {
+                            int32_t val = j["stream_first_chunk_frames"].get<int32_t>();
+                            pipelineParams.stream_first_chunk_frames = std::max(0, val);
+                        }
+
+                        if (j.contains("stream_first_chunk")) {
+                            int32_t val = j["stream_first_chunk"].get<int32_t>();
+                            pipelineParams.stream_first_chunk_frames = std::max(0, val);
                         }
 
                         if (j.contains("stream_holdback_frames")) {
@@ -733,15 +795,21 @@ namespace s2
                     }
                 }
 
-                bool expected_idle = false;
-                if (!server_busy->compare_exchange_strong(expected_idle, true)) {
-                    res.status = 503;
-                    res.set_content("Server busy processing another synthesis request.", "text/plain");
-                    return;
+                switch (gate->acquire()) {
+                    case RequestGate::Status::QueueFull:
+                        res.status = 503;
+                        res.set_content("Server queue is full.", "text/plain");
+                        return;
+                    case RequestGate::Status::TimedOut:
+                        res.status = 503;
+                        res.set_content("Timed out waiting for the server.", "text/plain");
+                        return;
+                    case RequestGate::Status::Acquired:
+                        break;
                 }
 
                 auto release_busy = [&]() {
-                    server_busy->store(false);
+                    gate->release();
                 };
 
                 if (!stream_response && !segment_sentences) {
@@ -891,7 +959,7 @@ namespace s2
                     }
                 );
 
-                std::thread synth_thread([pipeline, pipelineParams, ref_audio, sink, server_busy,
+                std::thread synth_thread([pipeline, pipelineParams, ref_audio, sink, gate,
                                           segment_sentences, segmented_texts, sentence_pause_ms]() mutable {
                     const bool ok = segment_sentences
                         ? synthesize_segmented_to_sink(*pipeline, pipelineParams, ref_audio,
@@ -901,7 +969,7 @@ namespace s2
                         std::cerr << "Streaming synthesis failed." << std::endl;
 
                     }
-                    server_busy->store(false);
+                    gate->release();
                 });
                 {
                     std::lock_guard<std::mutex> lock(active_threads_mtx);

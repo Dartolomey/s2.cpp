@@ -19,6 +19,10 @@ namespace s2
   {
     std::string host = "127.0.0.1";
     int32_t port = 3030;
+    // Concurrent /generate requests: one runs, the rest wait for the slot instead
+    // of getting a 503. Bounded so a burst cannot park unbounded handler threads.
+    int32_t max_queued_requests = 4;
+    int32_t queue_timeout_ms = 60000;
 
     PipelineParams pipeline;
   };
