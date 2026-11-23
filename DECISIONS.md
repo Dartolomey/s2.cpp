@@ -210,6 +210,14 @@ Merged into the working branch as `7c97c5b` and re-measured: full run `runs/v084
 - Concurrent `/generate` requests now wait for the single synthesis slot instead of getting an immediate 503. Bounds: `--max-queued` (default 4 waiters) and `--queue-timeout-ms` (default 60 s); queue-full and timeout still return 503 with distinct messages. Verified: two concurrent requests both 200 (second waits for the first), `--max-queued 0` → immediate 503, `--queue-timeout-ms 1000` → 503 after 1.0 s.
 - Still no batch inference: queued requests cost separate full passes (documented in README limitations).
 
+### Errors instead of silent fallbacks
+The engine used to warn and continue on a slower path in several places. Now:
+- the codec no longer moves to the CPU when the requested GPU backend fails (including out-of-memory): `load_shared` takes `allow_cpu_fallback` (default false), prints the backend and device plus a hint to pass `--codec-cpu`, and aborts. `--codec-auto` stays the explicit flag that may choose CPU;
+- a reference audio that cannot be loaded or encoded is an error (CLI exit 1, server HTTP 400); no more "running without reference audio";
+- prefill/step/fast-decode failures set `GenerateResult::failed` and abort the request instead of emitting zero codebooks or a truncated file; the fast-AR cache allocation failure is a hard error, not the uncached fallback;
+- the only remaining fallbacks preserve the result: `--codec-auto` backend choice, and the F32 fast-embedding table falling back to CPU gathers with a warning when its 42 MB cannot be allocated.
+Verified: missing reference -> exit 1 with "could not load the reference audio <path>"; garbage reference over HTTP -> 400 "Reference audio could not be decoded."; normal line 8 byte-identical (`B270AA9D…`); build smoke test passes.
+
 
 
 

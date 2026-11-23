@@ -841,7 +841,10 @@ namespace s2
                 if (ref_audio_buffer && ref_audio_size > 0) {
                     if (!s2::load_audio_from_memory(ref_audio_buffer, ref_audio_size,
                                                     ref_audio, pipeline->output_sample_rate())) {
-                        S2_LOG_WARN_STREAM("Failed to load reference audio; continuing without it." << std::endl);
+                        release_busy();
+                        res.status = 400;
+                        res.set_content("Reference audio could not be decoded.", "text/plain");
+                        return;
                     }
                 }
 

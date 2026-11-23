@@ -490,22 +490,17 @@ bool Pipeline::init(const PipelineParams & params) {
         }
         codec_loaded = codec().load_shared(&model(), shared_gguf, params.model_path, codec_gpu_device, codec_backend_type);
         if (!codec_loaded) {
-            if (codec_backend_type == BackendType::Metal) {
-                safe_print_warn_ln(
-                    "Pipeline warning: codec " + backend_label +
-                    " load failed, falling back to CPU.");
-            } else {
-                safe_print_warn_ln(
-                    "Pipeline warning: codec " + backend_label +
-                    " load failed on device " + std::to_string(codec_gpu_device) +
-                    ", falling back to CPU.");
-            }
+            std::string where = (codec_backend_type == BackendType::Metal)
+                                    ? backend_label
+                                    : backend_label + " device " + std::to_string(codec_gpu_device);
+            safe_print_error_ln("Pipeline error: codec could not be loaded on " + where + ".");
+            safe_print_error_ln("Pipeline error: free VRAM (the codec needs about 0.8 GB) and retry, "
+                                "or pass --codec-cpu explicitly if CPU decoding is intended.");
+            gguf_free(shared_gguf);
+            return false;
         }
-    }
-    if (!codec_loaded) {
-        if (!use_gpu_codec) {
-            safe_print_ln("Pipeline: loading codec on CPU.");
-        }
+    } else {
+        safe_print_ln("Pipeline: loading codec on CPU.");
         codec_loaded = codec().load_shared(&model(), shared_gguf, params.model_path, -1, BackendType::CPU);
     }
     if (!codec_loaded) {
@@ -607,9 +602,10 @@ bool Pipeline::resolve_reference_prompt_locked(const PipelineParams & params, Au
         const auto ref_t0 = std::chrono::steady_clock::now();
         if (!codec().encode(ref_audio.samples.data(), static_cast<int32_t>(ref_audio.samples.size()),
                             params.gen.n_threads, ref_codes, T_prompt)) {
-            safe_print_warn_ln("Pipeline warning: encode failed, running without reference audio.");
+            safe_print_error_ln("Pipeline error: could not encode the reference audio.");
             ref_codes.clear();
             T_prompt = 0;
+            return false;
         }
         const auto ref_t1 = std::chrono::steady_clock::now();
         ref_encode_ms = std::chrono::duration<double, std::milli>(ref_t1 - ref_t0).count();
@@ -661,7 +657,8 @@ bool Pipeline::synthesize_to_memory(const PipelineParams & params, const void * 
     if (ref_audio_buffer != nullptr && ref_audio_size > 0) {
         safe_print_ln("Loading reference audio...");
         if (!load_audio_from_memory(ref_audio_buffer, ref_audio_size, ref_audio, codec().sample_rate())) {
-            safe_print_warn_ln("Pipeline warning: load_audio failed, running without reference audio.");
+            safe_print_error_ln("Pipeline error: could not decode the reference audio buffer.");
+            return false;
         }
     }
 
@@ -708,13 +705,13 @@ bool Pipeline::encode_prompt_audio(const std::string & audio_path, int32_t n_thr
 
     AudioData ref_audio;
     if (!load_audio(audio_path, ref_audio, codec().sample_rate())) {
-        safe_print_warn_ln("Pipeline warning: load_audio failed, running without reference audio.");
+        safe_print_error_ln("Pipeline error: could not load the reference audio " + audio_path);
         return false;
     }
 
     if (!codec().encode(ref_audio.samples.data(), static_cast<int32_t>(ref_audio.samples.size()),
                         n_threads, codes_out, n_frames_out)) {
-        safe_print_warn_ln("Pipeline warning: encode failed, running without reference audio.");
+        safe_print_error_ln("Pipeline error: could not encode the reference audio.");
         codes_out.clear();
         n_frames_out = 0;
         return false;
@@ -739,7 +736,7 @@ bool Pipeline::encode_prompt_audio_data(const AudioData & ref_audio, int32_t n_t
 
     if (!codec().encode(ref_audio.samples.data(), static_cast<int32_t>(ref_audio.samples.size()),
                         n_threads, codes_out, n_frames_out)) {
-        safe_print_warn_ln("Pipeline warning: encode failed, running without reference audio.");
+        safe_print_error_ln("Pipeline error: could not encode the reference audio.");
         codes_out.clear();
         n_frames_out = 0;
         return false;
@@ -866,8 +863,8 @@ bool Pipeline::synthesize_prompt_codes_locked(const PipelineParams & params, con
     GenerateResult res = generate(model(), tokenizer().config(), prompt, params.gen);
     const auto gen_t1 = std::chrono::steady_clock::now();
 
-    if (res.n_frames == 0) {
-        safe_print_error_ln("Pipeline error: generation produced no frames.");
+    if (res.n_frames == 0 || res.failed) {
+        safe_print_error_ln("Pipeline error: generation failed.");
         return false;
     }
 
@@ -1183,9 +1180,9 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
     job_cv.notify_all();
     codec_worker.join();
 
-    if (res.n_frames == 0) {
-        safe_print_error_ln("Pipeline error: generation produced no frames.");
-        sink.on_error("Generation produced no frames");
+    if (res.n_frames == 0 || res.failed) {
+        safe_print_error_ln("Pipeline error: generation failed.");
+        sink.on_error("Generation failed");
         model().clear_kv_cache();
         return false;
     }
@@ -1243,7 +1240,8 @@ bool Pipeline::synthesize_streaming_file(const PipelineParams & params) {
     if (!params.prompt_audio_path.empty()) {
         safe_print_ln("Loading reference audio: " + params.prompt_audio_path);
         if (!load_audio(params.prompt_audio_path, ref_audio, codec().sample_rate())) {
-            safe_print_warn_ln("Pipeline warning: load_audio failed, running without reference audio.");
+            safe_print_error_ln("Pipeline error: could not load the reference audio " + params.prompt_audio_path);
+            return false;
         }
     }
 

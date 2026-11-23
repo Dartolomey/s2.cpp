@@ -41,6 +41,7 @@ struct GenerateResult {
     std::vector<int32_t> codes;
     int32_t num_codebooks = 0;
     int32_t n_frames      = 0;
+    bool    failed        = false; // prefill/step/fast-decode failure, not a client abort
 };
 
 GenerateResult generate(

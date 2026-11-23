@@ -1027,6 +1027,8 @@ bool SlowARModel::ensure_fast_embeddings_gpu(int32_t n_threads) {
     fast_embeddings_gpu_ = ggml_new_tensor_2d(ctx_fast_emb_, GGML_TYPE_F32, dim, n);
     fast_emb_buf_ = ggml_backend_alloc_ctx_tensors(ctx_fast_emb_, backend_gpu_);
     if (!fast_emb_buf_) {
+        std::cerr << "[Model] Failed to allocate the F32 fast-embedding table on the GPU; "
+                     "falling back to CPU gathers (slower)." << std::endl;
         free_fast_embeddings_gpu();
         ggml_free(ctx);
         return false;
@@ -1826,7 +1828,12 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
     }
     ensure_fast_embeddings_gpu(n_threads);
     if (!init_fast_cache()) {
-        return fast_decode_uncached(hidden_in, prefix_tokens, n_threads, logits_out);
+        // The fast-AR KV cache is a few hundred KB; failing to allocate it means the
+        // device is out of memory. Running the uncached path would hide that and be
+        // several times slower, so fail the generation instead.
+        std::cerr << "[Model] Fast-AR cache is unavailable (out of memory?); aborting "
+                     "instead of the slow fallback." << std::endl;
+        return false;
     }
 
     // The caller asks for the logits after [hidden, code_0 .. code_(n-1)]. Within one frame each call

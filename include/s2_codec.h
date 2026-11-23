@@ -26,9 +26,11 @@ public:
     AudioCodec();
     ~AudioCodec();
 
-    bool load(const std::string & gguf_path, int32_t gpu_device = -1, BackendType backend_type = BackendType::CPU);
+    bool load(const std::string & gguf_path, int32_t gpu_device = -1, BackendType backend_type = BackendType::CPU,
+              bool allow_cpu_fallback = false);
 
-    bool load_shared(SlowARModel* Model, gguf_context * gguf_ctx, const std::string & gguf_path, int32_t gpu_device = -1, BackendType backend_type = BackendType::CPU);
+    bool load_shared(SlowARModel* Model, gguf_context * gguf_ctx, const std::string & gguf_path, int32_t gpu_device = -1, BackendType backend_type = BackendType::CPU,
+                     bool allow_cpu_fallback = false);
 
     bool read_tensor_data(const std::string & gguf_path, gguf_context * gguf_ctx);
 

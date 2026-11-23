@@ -30,3 +30,6 @@ bool log_enabled(LogLevel level);
 
 #define S2_LOG_WARN_STREAM(expr) \
     do { if (::s2::log_enabled(::s2::LogLevel::Warning)) { std::cerr << expr; } } while (false)
+
+#define S2_LOG_ERROR_STREAM(expr) \
+    do { if (::s2::log_enabled(::s2::LogLevel::Error)) { std::cerr << expr; } } while (false)

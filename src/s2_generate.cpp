@@ -50,6 +50,7 @@ GenerateResult generate(
     const auto prefill_t0 = std::chrono::steady_clock::now();
     if (!model.prefill_fast(prompt_tm, prompt.cols, params.n_threads, state)) {
         std::cerr << "[Generate] Prefill failed." << std::endl;
+        out.failed = true;
         return out;
     }
     const auto prefill_t1 = std::chrono::steady_clock::now();
@@ -132,16 +133,17 @@ GenerateResult generate(
             const auto fd_t0 = std::chrono::steady_clock::now();
             if (!model.fast_decode(state.hidden, codebooks_cb, params.n_threads, fast_logits)) {
                 std::cerr << "[Generate] fast_decode failed at cb " << cb_idx << std::endl;
-
-                for (int32_t r = cb_idx; r < num_cb; ++r) {
-                    codebooks_cb.push_back(0);
-                }
+                out.failed = true;
                 break;
             }
             int32_t cb_token = sample_token(fast_logits.data(), (int32_t)fast_logits.size(), sparams);
             codebooks_cb.push_back(cb_token);
             const auto fd_t1 = std::chrono::steady_clock::now();
             fast_decode_ms += std::chrono::duration<double, std::milli>(fd_t1 - fd_t0).count();
+        }
+
+        if (out.failed) {
+            break;
         }
 
         for (int32_t cb = 0; cb < num_cb; ++cb) {
@@ -173,6 +175,7 @@ GenerateResult generate(
         const auto ss_t0 = std::chrono::steady_clock::now();
         if (!model.step(step_input, params.n_threads, state)) {
             std::cerr << "[Generate] step() failed at step " << step << std::endl;
+            out.failed = true;
             break;
         }
         const auto ss_t1 = std::chrono::steady_clock::now();

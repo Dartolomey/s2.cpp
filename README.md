@@ -642,6 +642,19 @@ Voice quality and amplitude tend to degrade after ~800 tokens (~37 s of audio). 
 
 ---
 
+## Errors and fallbacks
+
+There are no silent downgrades:
+
+- If the codec cannot initialize on the requested GPU (including out-of-memory), startup fails with the backend and device in the message and a hint to pass `--codec-cpu`; it does not quietly move the codec to the CPU. `--codec-auto` is the explicit exception: that flag benchmarks both and may pick CPU.
+- If a reference audio file or buffer cannot be loaded or encoded, it is an error (CLI exits 1, the server returns HTTP 400). The engine does not synthesize without the voice you asked for.
+- If a prefill, prompt step or fast-AR step fails, the request is aborted instead of emitting zero codebooks or a truncated file.
+- A GPU weight allocation failure reports the requested size, the backend's per-allocation limit and a suggestion (`--gpu-layers N`) and aborts; it never places the transformer weights on the CPU behind your back.
+
+The only intentional fallbacks are the ones that do not change the result: `--codec-auto` choosing a backend, and the fast-AR GPU embedding table using CPU gathers (with a warning) when its 42 MB allocation is not possible.
+
+---
+
 ## Known limitations (alpha)
 
 - No batch inference: concurrent requests queue, they do not share a decode step yet, so two requests cost two full passes and latency of the second grows

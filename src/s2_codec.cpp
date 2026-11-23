@@ -998,7 +998,7 @@ void AudioCodec::clear_decode_cache() {
     }
 }
 
-bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx, const std::string & gguf_path, int32_t gpu_device, BackendType backend_type) {
+bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx, const std::string & gguf_path, int32_t gpu_device, BackendType backend_type, bool allow_cpu_fallback) {
     if (!impl_) {
         impl_ = new Impl();
     } else {
@@ -1009,8 +1009,6 @@ bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx,
     num_codebooks_ = 10;
     samples_per_code_frame_ = 2048;
     streaming_history_frames_ = 160;
-    bool warned_backend_fallback = false;
-
     const bool wants_gpu_backend =
         backend_type != BackendType::CPU &&
         (gpu_device >= 0 || backend_type == BackendType::Metal);
@@ -1020,8 +1018,7 @@ bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx,
         if (!impl_->backend && backend_type == BackendType::Vulkan) {
             impl_->backend = ggml_backend_vk_init(static_cast<size_t>(gpu_device));
             if (!impl_->backend) {
-                S2_LOG_WARN_STREAM("[Codec] Vulkan init failed, falling back to CPU." << std::endl);
-                warned_backend_fallback = true;
+                S2_LOG_ERROR_STREAM("[Codec] Vulkan init failed for device " << gpu_device << "." << std::endl);
             }
         }
 #endif
@@ -1029,8 +1026,7 @@ bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx,
         if (!impl_->backend && backend_type == BackendType::CUDA) {
             impl_->backend = ggml_backend_cuda_init(static_cast<size_t>(gpu_device));
             if (!impl_->backend) {
-                S2_LOG_WARN_STREAM("[Codec] Cuda init failed, falling back to CPU." << std::endl);
-                warned_backend_fallback = true;
+                S2_LOG_ERROR_STREAM("[Codec] CUDA init failed for device " << gpu_device << "." << std::endl);
             }
         }
 #endif
@@ -1038,15 +1034,22 @@ bool AudioCodec::load_shared(SlowARModel* Model, gguf_context * shared_gguf_ctx,
         if (!impl_->backend && backend_type == BackendType::Metal) {
             impl_->backend = ggml_backend_metal_init();
             if (!impl_->backend) {
-                S2_LOG_WARN_STREAM("[Codec] Metal init failed, falling back to CPU." << std::endl);
-                warned_backend_fallback = true;
+                S2_LOG_ERROR_STREAM("[Codec] Metal init failed." << std::endl);
             }
         }
 #endif
     }
-    if (!impl_->backend && wants_gpu_backend && !warned_backend_fallback) {
-        S2_LOG_WARN_STREAM("[Codec] Requested " << backend_type_name(backend_type)
-                  << " backend unavailable, falling back to CPU." << std::endl);
+    if (!impl_->backend && wants_gpu_backend) {
+        if (!allow_cpu_fallback) {
+            std::cerr << "[Codec] The " << backend_type_name(backend_type)
+                      << " backend was requested but could not be initialized."
+                      << " Free VRAM (the codec needs about 0.8 GB) and retry, or pass"
+                      << " --codec-cpu explicitly if CPU decoding is intended." << std::endl;
+            reset_codec_impl(*impl_);
+            return false;
+        }
+        S2_LOG_WARN_STREAM("[Codec] " << backend_type_name(backend_type)
+                  << " backend unavailable; continuing on CPU (allowed by codec auto-selection)." << std::endl);
     }
     if (!impl_->backend) impl_->backend = ggml_backend_cpu_init();
     if (!impl_->backend) {
@@ -1258,7 +1261,7 @@ bool AudioCodec::read_tensor_data(const std::string & gguf_path, gguf_context * 
     return refresh_host_caches();
 }
 
-bool AudioCodec::load(const std::string & gguf_path, int32_t gpu_device, BackendType backend_type) {
+bool AudioCodec::load(const std::string & gguf_path, int32_t gpu_device, BackendType backend_type, bool allow_cpu_fallback) {
 
     struct gguf_init_params params = { true, nullptr };
     gguf_context * ctx_gguf = gguf_init_from_file(gguf_path.c_str(), params);
@@ -1267,7 +1270,7 @@ bool AudioCodec::load(const std::string & gguf_path, int32_t gpu_device, Backend
         return false;
     }
 
-    if (!load_shared(nullptr, ctx_gguf, gguf_path, gpu_device, backend_type)) {
+    if (!load_shared(nullptr, ctx_gguf, gguf_path, gpu_device, backend_type, allow_cpu_fallback)) {
         gguf_free(ctx_gguf);
         return false;
     }
