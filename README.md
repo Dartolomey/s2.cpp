@@ -206,6 +206,7 @@ All opaque objects follow an `Alloc` / `Release` pattern:
 | Field | Default | Description |
 |---|---|---|
 | `stream_decode_stride_frames` | `0` (auto) | Decode cadence in frames |
+| `stream_first_chunk_frames` | `0` (auto) | Frames in the first streamed chunk; the server uses `1` |
 | `stream_holdback_frames` | `-1` (auto) | Trailing frames buffered before emission |
 | `codec_decode_context_frames` | `-1` (auto) | Codec decode history window; lower uses less VRAM |
 | `low_latency` | `0` | Aggressive live preset (`stride=1`, `holdback=0`) |
@@ -403,11 +404,14 @@ For stability, embedding lookups remain on CPU in the current CUDA hybrid path, 
 | `--codec-auto` / `--codec-follow-backend` / `--codec-cpu` | `--codec-follow-backend` | `--codec-follow-backend` lets the codec follow the selected GPU backend; `--codec-auto` benchmarks both backends at startup and keeps the fastest (slower start); `--codec-cpu` keeps the codec on CPU. If codec GPU init or allocation fails, the runtime falls back to CPU |
 | `--codec-context-frames <n>` | `auto` | Override codec decode history window. Lower values use less VRAM but may reduce quality |
 | `--stream-decode-stride N` | `0` | Decode cadence in frames. `0` = auto (`4`) |
+| `--stream-first-chunk N` | `0` | Frames in the first streamed chunk; `0` = same as the stride. The server uses `1` for client streams |
 | `--prefix-kv` | off | Reuse the reference-prompt KV between server requests of one voice (faster TTFA; cache hits draw a different, equally valid sample) |
 | `--log-level LEVEL` | `info` | Runtime log verbosity: `error`, `warn`, `info`, or `debug` |
 | `--server` | — | Start HTTP server instead of CLI synthesis |
 | `-H`, `--host` | `127.0.0.1` | Server bind address |
 | `-P`, `--port` | `3030` | Server port |
+| `--max-queued N` | `4` | Requests allowed to wait behind the active synthesis |
+| `--queue-timeout-ms N` | `60000` | How long a waiting request waits before `503` |
 | `-h`, `--help` | — | Show help (includes the engine version) |
 | `--version` | — | Print the engine version and exit |
 
@@ -436,7 +440,7 @@ An OpenAPI 3.1 description of the server lives at `openapi/s2-openapi.yaml`.
 | `reference_text` | string | if reference audio is provided | Transcript of the reference audio. Aliases: `ref_text`, `prompt_text` |
 | `voice` | string | no | Saved voice profile id such as `hope`, or a `.s2voice` path such as `voices/hope.s2voice`. Aliases: `voice_id`, `voice_profile` |
 | `voice_dir` | string | no | Directory used when `voice` is given as an id instead of a full `.s2voice` path |
-| `params` | JSON string | no | Generation params: `max_new_tokens`, `temperature`, `top_p`, `top_k`, `min_tokens_before_end`, `n_threads`, `codec_follow_backend`, `codec_auto_backend`, `codec_decode_context_frames` (alias: `codec_context_frames`), `voice`, `voice_id`, `voice_dir`, `stream`, `chunked`, `realtime`, `stream_decode_stride_frames`, `stream_decode_stride`, `stream_holdback_frames`, `stream_start_buffer_ms`, `segment_sentences`, `sentence_pause_ms`, `segment_max_chars`, `low_latency`, `output_format`, `verbose` |
+| `params` | JSON string | no | Generation params: `max_new_tokens`, `temperature`, `top_p`, `top_k`, `min_tokens_before_end`, `n_threads`, `codec_follow_backend`, `codec_auto_backend`, `codec_decode_context_frames` (alias: `codec_context_frames`), `voice`, `voice_id`, `voice_dir`, `stream`, `chunked`, `realtime`, `stream_decode_stride_frames`, `stream_decode_stride`, `stream_first_chunk_frames`, `stream_first_chunk`, `stream_holdback_frames`, `stream_start_buffer_ms`, `segment_sentences`, `sentence_pause_ms`, `segment_max_chars`, `low_latency`, `output_format`, `verbose` |
 
 Returns a finalized `audio/wav` download by default.
 
@@ -445,7 +449,7 @@ Returns a finalized `audio/wav` download by default.
 - `params.stream=true` plus `params.chunked=true` (or `params.realtime=true`): keeps the real-time chunked PCM16 WAV transport for clients that want bytes as soon as they are generated. The WAV header uses large provisional RIFF/data sizes because the server cannot seek back over a live HTTP stream. If you save that response directly to disk, readers should still decode it cleanly, but tools may estimate duration from bitrate because the header is not fully finalized; use `params.stream=true` without `chunked` when you need a clean finalized WAV header.
 - `voice=hope` reuses `./voices/hope.s2voice` by default. You can also pass `voice=voices/hope.s2voice` to target a specific file directly.
 - `params.output_format="pcm_s16le"` with `params.stream=true`: skips the WAV header entirely and returns raw PCM16 mono bytes. This is the preferred transport for a browser/app that wants to maintain a dynamic playback buffer instead of saving a file. The server includes `X-Audio-Sample-Rate`, `X-Audio-Channels`, and `X-Audio-Encoding` headers for convenience; clients should use those headers instead of assuming a fixed sample rate.
-- `params.low_latency=true`: applies an aggressive live preset for weak machines by defaulting to `stream_decode_stride_frames=1` and `stream_holdback_frames=0`, so playback can start as soon as samples exist.
+- `params.low_latency=true`: applies an aggressive live preset for weak machines by defaulting to `stream_decode_stride_frames=1` and `stream_holdback_frames=0`, so playback can start as soon as samples exist. Client streams already start with one frame (`stream_first_chunk_frames=1`) even without this preset.
 - `params.stream_holdback_frames=N`: controls how many trailing codec frames stay buffered before they are emitted. Lower values reduce startup latency; higher values keep chunk boundaries more stable. `0` is the lowest-latency option, while the default auto mode uses the codec's full history window.
 - `params.stream_start_buffer_ms=N`: for chunked HTTP streaming, waits until roughly `N` milliseconds of PCM are queued before the server starts sending bytes. This is the best option when you want natural playback and can tolerate a short startup delay.
 - `params.segment_sentences=true`: switches the server from exact frame streaming to sentence-by-sentence synthesis. This is usually the best mode for slower machines because each sentence is generated as a whole, then queued for playback.
@@ -454,7 +458,7 @@ Returns a finalized `audio/wav` download by default.
 
 If the machine synthesizes slower than real time, uninterrupted live playback is only possible when the client keeps a dynamic buffer. In practice, stream `pcm_s16le`, wait until a few seconds of PCM are queued before starting playback, and pause/resume or change the target buffer depth when the queue drains too far.
 
-The HTTP server currently runs one synthesis at a time. If another `POST /generate` request arrives while generation is active, the server returns HTTP `503` immediately instead of queuing behind the active request. If the client disconnects or cancels the download, cancellation is propagated into the generation loop so the synthesis aborts early and releases the busy state for the next request. Request validation failures, JSON parse failures, and invalid `params` value types return HTTP `400`; synthesis failures detected before a response body starts return HTTP `500`. Real-time chunked responses may instead terminate early if generation fails after streaming has already begun.
+The HTTP server runs one synthesis at a time and queues the rest: concurrent `POST /generate` requests wait for the slot instead of failing, up to `--max-queued` waiters and `--queue-timeout-ms` (a request that cannot start in time gets HTTP `503` with `Server queue is full.` or `Timed out waiting for the server.`). If the client disconnects or cancels the download, cancellation is propagated into the generation loop so the synthesis aborts early and releases the slot for the next request. Request validation failures, JSON parse failures, and invalid `params` value types return HTTP `400`; synthesis failures detected before a response body starts return HTTP `500`. Real-time chunked responses may instead terminate early if generation fails after streaming has already begun.
 
 ```bash
 # Basic
@@ -640,9 +644,8 @@ Voice quality and amplitude tend to degrade after ~800 tokens (~37 s of audio). 
 
 ## Known limitations (alpha)
 
-- Exact streaming still re-decodes the confirmed prefix, so streaming latency and CPU time remain structurally high until the codec becomes incremental/stateful. `stream_holdback_frames` can reduce perceived startup delay, but too-low values may add audible boundary artifacts
-- No batch inference
-- No HTTP request queue: the server accepts one active `/generate` synthesis and returns `503` for concurrent requests
+- No batch inference: concurrent requests queue, they do not share a decode step yet, so two requests cost two full passes and latency of the second grows
+- Very short replies still pay one prefill; TTFA is ~0.07 s with a prepared profile
 - Voice cloning quality depends heavily on reference audio length and SNR
 - Windows: CUDA and Vulkan backends are supported; when using MSVC 2019+, ensure CUDA ≥ 12.4 is installed before building
 - macOS is untested

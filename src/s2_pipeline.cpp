@@ -1066,6 +1066,9 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
     int32_t submitted_frames = 0;
     const int32_t stream_decode_stride_frames =
         params.stream_decode_stride_frames > 0 ? params.stream_decode_stride_frames : 4;
+    const int32_t stream_first_chunk_frames =
+        params.stream_first_chunk_frames > 0 ? params.stream_first_chunk_frames
+                                             : stream_decode_stride_frames;
 
     // Stateful codec: each frame is decoded once, the state carries the convolutions'
     // tails and the codec transformer's KV, so nothing is re-decoded and no holdback
@@ -1149,7 +1152,10 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
         for (int32_t cb = 0; cb < fcd.num_codebooks; ++cb) {
             accumulated_codes_by_cb[cb].push_back(fcd.codes[cb]);
         }
-        if ((fcd.total_frames - submitted_frames) < stream_decode_stride_frames) {
+        const int32_t chunk_frames = (submitted_frames == 0)
+                                         ? stream_first_chunk_frames
+                                         : stream_decode_stride_frames;
+        if ((fcd.total_frames - submitted_frames) < chunk_frames) {
             return true;
         }
         return submit(fcd.total_frames);
@@ -1211,6 +1217,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
         ", ref_encode=" + std::to_string(ref_encode_ms) +
         " ms, kv_init=" + std::to_string(kv_ms) +
         " ms, stride=" + std::to_string(stream_decode_stride_frames) +
+        ", first_chunk=" + std::to_string(stream_first_chunk_frames) +
         " frames, stateful_codec=1" +
         " frames, generate=" + std::to_string(gen_ms) +
         " ms, stream_decode=" + std::to_string(stream_decode_ms) +

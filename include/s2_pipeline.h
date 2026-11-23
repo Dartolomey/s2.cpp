@@ -48,6 +48,9 @@ struct PipelineParams {
     bool codec_auto_backend = false;
     bool codec_follow_backend = true;
     int32_t stream_decode_stride_frames = 0;
+    // Frames in the first streamed chunk. 0 = same as the stride. A smaller first
+    // chunk gives the client audio sooner; the codec state makes it equivalent.
+    int32_t stream_first_chunk_frames = 0;
     int32_t stream_holdback_frames = -1;
     int32_t codec_decode_context_frames = -1;
     bool trim_silence = false;

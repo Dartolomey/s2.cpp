@@ -103,12 +103,15 @@ void print_uso() {
     safe_print("  --codec-follow-backend      Force codec to follow the selected GPU backend (default)\n");
     safe_print("  --codec-cpu                 Force codec on CPU even when model uses GPU\n");
     safe_print("  --stream-decode-stride <n>  Decode cadence in frames (0 = auto: 4)\n");
+    safe_print("  --stream-first-chunk <n>    Frames in the first streamed chunk (0 = same as the stride)\n");
     safe_print("  --codec-context-frames <n>  Override codec decode history (lower uses less VRAM, default: auto)\n");
     safe_print("  --prefix-kv                 Reuse reference-prompt KV between server requests of one voice\n");
     safe_print("  --log-level <level>         error, warn, info, or debug (default: info)\n");
     safe_print("  --server                    Start HTTP server\n");
     safe_print("  -H, --host         <host>   Server host (default: 127.0.0.1)\n");
     safe_print("  -P, --port         <port>   Server port (default: 3030)\n");
+    safe_print("  --max-queued <n>            Requests allowed to wait for the synthesis slot (default: 4)\n");
+    safe_print("  --queue-timeout-ms <n>      How long a waiting request waits before 503 (default: 60000)\n");
     safe_print("  -h, --help                  Show this help\n");
     safe_print("  --version                   Print the engine version and exit\n");
 }
@@ -237,6 +240,11 @@ int main(int argc, char** argv) {
                 try { params.stream_decode_stride_frames = std::stoi(argv[++i]); } catch(...) {}
             }
         }
+        else if (arg == "--stream-first-chunk") {
+            if (i+1 < argc) {
+                try { params.stream_first_chunk_frames = std::stoi(argv[++i]); } catch(...) {}
+            }
+        }
         else if (arg == "--codec-context-frames") {
             if (i+1 < argc) {
 #ifdef WIN32
@@ -260,6 +268,8 @@ int main(int argc, char** argv) {
         else if (arg == "--server")           { use_server = true; }
         else if (arg == "-H" || arg == "--host") { if (i+1 < argc) serverParams.host = argv[++i]; }
         else if (arg == "-P" || arg == "--port") { if (i+1 < argc) { try { serverParams.port = std::stoi(argv[++i]); } catch(...) {} } }
+        else if (arg == "--max-queued") { if (i+1 < argc) { try { serverParams.max_queued_requests = (std::max)(0, std::stoi(argv[++i])); } catch(...) {} } }
+        else if (arg == "--queue-timeout-ms") { if (i+1 < argc) { try { serverParams.queue_timeout_ms = (std::max)(0, std::stoi(argv[++i])); } catch(...) {} } }
         else if (arg == "-h" || arg == "--help") { print_uso(); return 0; }
         else if (arg == "--version") { safe_print("s2 " S2_VERSION "\n"); return 0; }
         else {
