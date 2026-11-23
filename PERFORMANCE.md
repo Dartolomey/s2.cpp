@@ -9,7 +9,7 @@ engine binary differs.
   `runs/v020-line8-baseline/voice/bench.s2voice`
 - Params: temp 0.8, top_p 0.8, top_k 30, max_tokens 1024, stride 4
 - Upstream: `forks/s2-upstream/build/s2.exe`, source `2c33261` (no seed support)
-- Ours: `Main/build/s2.exe` at `7c97c5b` (engine sha `f0060534…`)
+- Ours: `Main/build/s2.exe` at `49c67ba` (encoder restored, first frame streamed, request queue)
 
 Upstream has no `--seed`, so its audio is a different draw. RTF and TTFA are
 normalised by audio duration / wall time, so the comparison remains valid.
@@ -39,10 +39,10 @@ Runs: upstream `runs/v077-upstream-full`, ours `runs/v084-merged-full`.
 
 | mode / config | upstream | ours | speed-up |
 |---|---:|---:|---:|
-| profile, `buffer0` | 2.943-6.915 | **0.123-0.140** | 21-56x |
-| profile, `low_latency` | 0.385-0.470 | **0.120-0.140** | 2.8-3.9x |
-| profile, `buffer3000` | 3.389-15.927 | **1.261-1.282** | 2.6-12.6x |
-| raw, `buffer0` (reference encoded in the request) | 4.097-7.836 | **0.957-1.027** | 4.0-8.2x |
+| profile, `buffer0` | 2.943-6.915 | **0.064-0.099** | 30-108x |
+| profile, `low_latency` | 0.385-0.470 | **0.063-0.165** | 2.3-7.5x |
+| profile, `buffer3000` | 3.389-15.927 | **1.191-1.340** | 2.5-13.4x |
+| raw, `buffer0` (reference encoded in the request) | 4.097-7.836 | **0.890-1.027** | 4.0-8.8x |
 
 Upstream's `buffer0` waits for its own decode cadence before emitting the first
 chunk; `low_latency` forces a faster first byte but costs more decode work. Our
@@ -50,7 +50,7 @@ streaming path emits the first PCM after the first 4-frame chunk because the
 codec is stateful and the graph is already warm. Our raw path is faster now that
 the reference encoder is the pre-port one.
 
-Runs: upstream `runs/v080-upstream-ttfa`, ours `runs/v085-merged-ttfa`.
+Runs: upstream `runs/v080-upstream-ttfa`, ours `runs/v085-merged-ttfa`, `runs/v089-*` and `runs/v092-ttfa-final` (first-frame streaming). Ranges span the runs; the machine was shared, so single runs vary by ~20 ms.
 
 ## Memory (q4_k_m, one 35 s synthesis)
 
@@ -74,6 +74,8 @@ comparison), `merged-voice`/`merged-rawref` (after the merge), `upstream-voice`/
 - Stateful codec decoder (`stream_begin/stream_decode/stream_end`) instead of
   re-decoding the prefix per chunk: removes the quadratic growth and most of the
   TTFA wait. The codec *encoder* is the pre-port implementation (see below).
+- The first streamed chunk is one frame, not a full stride: the client gets the
+  first PCM as soon as one frame is decoded instead of four.
 - Flash attention and CUDA graphs for the decode steps.
 - Fast-AR with a KV cache instead of rebuilding the whole prefix per codebook.
 - One codebook-embedding gather per frame instead of ten.

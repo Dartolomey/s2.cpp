@@ -23,7 +23,7 @@ This repository contains:
 
 The engine runs the full pipeline: text → tokens → Slow-AR transformer (with KV cache) → Fast-AR codebook decoder → audio codec → WAV file.
 
-It is tuned for **streaming in a live voice agent**: with a prepared voice profile the first PCM bytes arrive in ~0.12 s and generation runs at 0.3–0.4× real time, so one GPU keeps a conversation with headroom instead of waiting for a whole utterance. The comparison with upstream is in [PERFORMANCE.md](PERFORMANCE.md).
+It is tuned for **streaming in a live voice agent**: with a prepared voice profile the first PCM bytes arrive in ~0.07 s and generation runs at 0.3–0.4× real time, so one GPU keeps a conversation with headroom instead of waiting for a whole utterance. The comparison with upstream is in [PERFORMANCE.md](PERFORMANCE.md).
 
 Why the engine looks the way it does, including the rejected experiments and their numbers, is written down in [DECISIONS.md](DECISIONS.md).
 
@@ -601,15 +601,15 @@ Measured on one machine (RTX 4080 SUPER 16 GB, Windows 11, CUDA 13.2), same mode
 |---|---:|---:|
 | RTF, 35 s utterance (q4_k_m) | 2.97 | **0.30** |
 | RTF, 5 s utterance (q4_k_m) | 0.86 | **0.35–0.38** |
-| TTFA, profile, `buffer0` (q8_0) | 2.9–6.9 s | **0.12–0.14 s** |
-| TTFA, raw reference (q8_0) | 4.1–7.8 s | **0.96–1.03 s** |
+| TTFA, profile, `buffer0` (q8_0) | 2.9–6.9 s | **0.06–0.10 s** |
+| TTFA, raw reference (q8_0) | 4.1–7.8 s | **0.89–1.03 s** |
 | VRAM, voice profile (q4_k_m) | 6.5 GB | **4.3 GB** |
 | Peak RAM | 1.25 GB | **1.15 GB** |
 
 The short-utterance RTF gain (~2.3-2.5x) comes from flash attention, CUDA graphs, the
 stateful codec and the Fast-AR KV cache. The long-utterance gain (~10x) adds the
 removal of upstream's growing-prefix re-decode. With a prepared profile, the
-system is a real-time streaming engine for a live agent: first audio in ~0.12 s,
+system is a real-time streaming engine for a live agent: first audio in ~0.07 s,
 then 0.3–0.4× real time.
 
 ---
