@@ -7,12 +7,62 @@
 
 > **Verified configuration:** this fork is developed and tested on **Windows + NVIDIA CUDA (Ada, SM 89)** only. The Linux, CPU-only, Vulkan and Metal paths come from upstream and are **not verified here** — they may build and run, but do not treat them as supported until someone tests them. See [Verified configuration](#verified-configuration).
 
+> **No approximations.** Every speed-up in this fork is a scheduling change: same weights, same sampling, same codebooks — file output is byte-identical (8/8 tests, sha256 equal). Details and evidence in [No quality trade-offs](#no-quality-trade-offs).
+
 > **Built on Fish Audio S2 Pro**
 > The model weights are licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
 > See [LICENSE.md](LICENSE.md) for full terms. Commercial use requires a separate license from Fish Audio — contact [business@fish.audio](mailto:business@fish.audio).
 
-> **Community / Сообщество:** questions, builds and live debugging — [X @LusienBart](https://x.com/LusienBart) · [Twitch](https://www.twitch.tv/dartolomey). English or Russian.
-> Вопросы, сборки и живая отладка — X или Twitch, можно по-русски.
+---
+
+## Community
+
+This engine is built in public — builds, failed experiments and live debugging happen on stream. Questions, bug reports and "I built X with it" are welcome.
+
+- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
+- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — live builds and debugging sessions
+
+English or Russian, either is fine.
+
+<details>
+<summary>По-русски</summary>
+
+Движок делается в прямом эфире: сборки, неудачные эксперименты и живая отладка. Вопросы, баги и «я сделал на нём X» — велком.
+
+- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
+- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — стримы сборки и отладки
+
+Можно писать по-русски или по-английски.
+
+</details>
+
+---
+
+## Why this engine
+
+Three things are hard to get together in one model that runs on your own GPU:
+
+- **Voice cloning from a short clip.** 5–30 seconds of reference audio plus its transcript — no fine-tuning, no training run. The profile is encoded once (`--prepare-voice`) and reused; the reference audio never leaves the machine.
+- **Emotion and style written into the text.** Inline tags change the delivery while keeping the same voice: `[excited]`, `[laughing]`, `[angry]`, `[surprised]`. The tests here are Russian; the model itself is multilingual.
+- **Fast enough to stream into a live avatar.** With a prepared profile the first PCM byte arrives in ~0.07 s and generation runs at ~0.30× real time, so one 16 GB GPU holds a conversation with headroom. That is what makes it usable in a VTuber rig or a voice agent instead of being a batch renderer.
+
+Everything runs locally: no per-character billing, no upload button, no service that can change the voice under you.
+
+---
+
+## No quality trade-offs
+
+Speed here comes from scheduling, not from approximating the model. The weights are loaded from GGUF as-is, the sampling distribution is unchanged, and the codebooks are the same ones the model would produce without any of the optimisations.
+
+| What | Evidence |
+|---|---|
+| Weights and codec tensors | used as-is, nothing is re-quantised at load |
+| Sampling (`top_k`, `top_p`, `temperature`, `seed`) | same distribution; the window tricks only skip logits that cannot be sampled |
+| Generated codes | unchanged by flash attention, CUDA graphs, KV reuse or the worker-thread codec decode |
+| File output (the path the tests use) | **byte-identical**: 8/8 tests match the previous verified build, sha256 equal, SNR = ∞ |
+| Streamed PCM | same codes and the same sample count; only chunk-boundary rounding differs — max Δ 32–54 LSB, SNR 66.9–67.2 dB, ASR transcripts identical |
+
+The one change that did alter the voice — a ported reference encoder — was reverted: it turned a division into a reciprocal multiply, and nearest-neighbour VQ amplified that into 15% different codes. After the revert the profile matched the old one byte-for-byte and WER fell from 0.0374 to 0.0015 in the project's ASR harness. Every rejected experiment and its numbers are in [DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -58,22 +108,24 @@ What changed, by area:
 
 ## Model variants
 
-GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face. **This fork has only been run with the two variants marked below.** The others are upstream's published files: they are expected to work, but nobody here has run them, so they are unverified.
+GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face. All variants share the same GGUF layout and the same audio codec; this fork changes the inference schedule, not the model format, the quantization kernels or the codec math — so every file below loads and runs with this engine. The two marked **verified** are the ones with full test runs behind them; the rest have not been run here, which says something about testing, not about compatibility.
 
 | File | Size | Status in this fork |
 |---|---|---|
 | `s2-pro-q4_k_m.gguf` | 3.6 GB | **verified — the working model.** Full 8-test CLI stream runs, ASR round-trip, determinism. ~4.3 GB VRAM steady, ~1.0 GB RSS, peak ~7.0 GB while encoding a 40 s reference |
 | `s2-pro-q8_0.gguf` | 5.6 GB | **verified on the server path.** Full 8-test server suite (profile + raw), TTFA matrix, ASR round-trip. Heavier than q4_k_m |
-| `s2-pro-f16.gguf` | 9.9 GB | upstream, not run here |
-| `s2-pro-q6_k.gguf` | 4.5 GB | upstream, not run here |
-| `s2-pro-q5_k_m.gguf` | 4.0 GB | upstream, not run here |
-| `s2-pro-q3_k.gguf` | 3.0 GB | upstream, not run here |
-| `s2-pro-q2_k.gguf` | 2.6 GB | upstream, not run here |
+| `s2-pro-f16.gguf` | 9.9 GB | loads the same — not tested here |
+| `s2-pro-q6_k.gguf` | 4.5 GB | loads the same — not tested here |
+| `s2-pro-q5_k_m.gguf` | 4.0 GB | loads the same — not tested here |
+| `s2-pro-q3_k.gguf` | 3.0 GB | loads the same — not tested here |
+| `s2-pro-q2_k.gguf` | 2.6 GB | loads the same — not tested here |
 
 All variants include both the transformer weights and the audio codec in a single file.
 The quantized variants keep the codec tensors (`c.*`) in `F16`, so only the AR transformer is quantized.
 
-**Quantization floor and recommendation.** `q4_k_m` is the smallest quant we would ship — it is where the voice still has minimal audible errors. Below it (`q3_k`, `q2_k`) words start stretching and the voice colour drifts. When VRAM allows, `q6_k` is the recommended quality/size point (it is upstream's file and is not benchmarked in this fork yet — see the table above); `q8_0` is near-lossless.
+**Why GGUF at all.** `s2.cpp` loads one GGUF that carries both the transformer and the audio codec, plus `tokenizer.json` beside it — that is the whole runtime footprint, and it is what fits a 16 GB card without offloading tricks. The BF16 build published alongside is `safetensors` without `codec.pth` — a different layout that this engine does not load; use the GGUF.
+
+**Quantization floor and recommendation.** `q4_k_m` is the smallest quant we would ship — it is where the voice still has minimal audible errors. Below it (`q3_k`, `q2_k`) words start stretching and the voice colour drifts. When VRAM allows, `q6_k` is the recommended quality/size point (not benchmarked here yet — see the table above); `q8_0` is near-lossless.
 
 On CUDA builds, `s2.cpp` keeps the embedding tables on CPU in the hybrid offload path. This avoids unsupported CUDA `get_rows` cases for K-quant embedding tensors (`q2_k`, `q3_k`, `q4_k`, `q5_k`, `q6_k`) and avoids the unstable voice-cloning prefill behavior seen when those lookups were pushed to CUDA. Transformer layers, Fast-AR, and the KV cache can still be offloaded according to `--gpu-layers`. (The Vulkan/Metal multi-buffer split described upstream is unverified in this fork.)
 
@@ -696,26 +748,6 @@ The only intentional fallbacks are the ones that do not change the result: `--co
 
 ---
 
-## Community
-
-Questions, build help, bug reports and live debugging:
-
-- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
-- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — live builds and debugging sessions
-
-English or Russian, either is fine.
-
-### Сообщество
-
-Вопросы, помощь со сборкой, баги и живая отладка:
-
-- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
-- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — стримы сборки и отладки
-
-Писать можно на русском или английском.
-
----
-
 ## License
 
 The model weights and associated materials are licensed under the **Fish Audio Research License**. Key points:
@@ -747,6 +779,17 @@ Each header keeps its own copyright and license notice at the top of the file. T
 ---
 
 ## Contributors
+
+### This fork
+
+| Who | What |
+|---|---|
+| [@Dartolomey](https://github.com/Dartolomey) | maintainer — integration, benchmarks, documentation, releases |
+| DeepSeek (AI pair programmer) | release engineering, documentation, benchmark harness and reviews alongside the maintainer. Not a human contributor and not responsible for releases |
+
+### Upstream — [rodrigomatta/s2.cpp](https://github.com/rodrigomatta/s2.cpp)
+
+The five people below are **upstream's** contributor list, kept here verbatim because this fork is built on their engine and history. The avatars link to their GitHub profiles; none of them maintains this fork.
 
 <table>
   <tr>
@@ -782,3 +825,8 @@ Each header keeps its own copyright and license notice at the top of the file. T
     </td>
   </tr>
 </table>
+
+Beyond upstream's list, code in this fork's history comes from:
+
+- [@chen3feng](https://github.com/chen3feng) — flash attention, CUDA-graph capture, the semantic sampling window, and the CUDA im2col / transposed-copy kernels (PRs #50–#52). Merged here, not in upstream's contributor list.
+- [@L9Tigrotto](https://github.com/L9Tigrotto) — the stateful streaming codec is ported from [s2-ilaria](https://github.com/L9Tigrotto/ilaria-s2.cpp).
