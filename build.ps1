@@ -128,9 +128,8 @@ $vcRoot = Split-Path (Split-Path (Split-Path $VcVars))   # ...\VC
 $redistRoot = Join-Path $vcRoot 'Redist\MSVC'
 $crt = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
        Sort-Object Name -Descending |
-       ForEach-Object { Join-Path $_.FullName 'x64\Microsoft.VC143.CRT' } |
-       Where-Object { Test-Path -LiteralPath $_ } |
-       Select-Object -First 1
+       ForEach-Object { Get-ChildItem -Path (Join-Path $_.FullName 'x64') -Directory -Filter 'Microsoft.VC1*CRT' -ErrorAction SilentlyContinue } |
+       Select-Object -First 1 -ExpandProperty FullName
 if ($crt) {
     Copy-Item -Path (Join-Path $crt '*.dll') -Destination $out -Force
 } else {
