@@ -32,6 +32,30 @@ Why the engine looks the way it does, including the rejected experiments and the
 
 ---
 
+## What's different from upstream
+
+This fork is over 50 commits ahead of [rodrigomatta/s2.cpp](https://github.com/rodrigomatta/s2.cpp). The base is unchanged; the work is latency, memory and failure behaviour.
+
+| | upstream | this fork |
+|---|---:|---:|
+| RTF, 35 s line (q4_k_m) | 2.97 | **0.30** |
+| RTF, 5 s line (q4_k_m) | 0.86 | **0.35** |
+| TTFA, prepared profile (q8_0) | 2.9–6.9 s | **0.064–0.099 s** |
+| VRAM, prepared profile | 6.54 GB | **4.35 GB** |
+| VRAM, raw reference in request | 7.02 GB | 7.00 GB |
+
+The numbers come from repeated runs on one machine (RTX 4080 SUPER); the full tables are in [PERFORMANCE.md](PERFORMANCE.md).
+
+What changed, by area:
+
+- **Streaming codec.** The decoder keeps its state (`stream_begin` / `stream_decode` / `stream_end`) instead of re-decoding the whole prefix per chunk, which removes the quadratic cost, and the first chunk is one frame, so the client hears audio immediately.
+- **Decode path.** Flash attention and CUDA-graph capture, Fast-AR with a KV cache instead of rebuilding the prefix per codebook, one codebook-embedding gather per frame, the sampling window and fast embeddings kept on the GPU, fused pre-cast norms, KV length rounded to 256 for the GQA path.
+- **Serving.** Concurrent HTTP requests are queued instead of rejected with 503; `--prepare-voice` encodes the reference once and the profile is reused; the reference-prompt KV and the KV buffer are reused across requests.
+- **Parameters.** `--seed`, `--stream-file`, `--stream-decode-stride` and the HTTP `params` object expose `top_k`, `top_p`, `temperature`, `seed`, `max_tokens` and the stream buffer — nothing generation-related is hard-coded.
+- **Failures are errors.** A failed GPU codec backend, an unreadable reference, a failed prefill or a tokenizer without `<|im_end|>` aborts with a clear message (CLI exit 1, HTTP 400) instead of quietly falling back to CPU or synthesising an unrequested voice.
+
+---
+
 ## Model variants
 
 GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face. **This fork has only been run with the two variants marked below.** The others are upstream's published files: they are expected to work, but nobody here has run them, so they are unverified.
@@ -107,11 +131,13 @@ No Python or PyTorch required. The executable and optional library targets link 
 The engine is a fork of [rodrigomatta/s2.cpp](https://github.com/rodrigomatta/s2.cpp); the upstream history is kept, so clone it with `ggml` as a submodule:
 
 ```bash
-git clone --recurse-submodules <this fork's URL>
+git clone --recurse-submodules https://github.com/Dartolomey/s2.cpp
 cd s2.cpp
 ```
 
 `ggml` is pinned to an exact commit in the submodule, and the optional fixes in `patches/` are applied automatically at configure time (configure fails if a patch no longer applies, so a clean clone always builds the same tree).
+
+Prebuilt Windows binaries (`s2.exe`, the CUDA/cuBLAS/MSVC DLLs and `tokenizer.json`) are published in Releases. The GGUF model is separate — see [Model variants](#model-variants).
 
 ### Windows + CUDA (the configuration this fork is developed on)
 
@@ -696,7 +722,7 @@ The model weights and associated materials are licensed under the **Fish Audio R
 
 - **Research and non-commercial use:** free, under the terms of this Agreement
 - **Commercial use:** requires a separate written license from Fish Audio
-- When distributing, you must include a copy of the license and the attribution notice
+- When distributing, you must include a copy of the license and the attribution notice ([NOTICE](NOTICE))
 - Attribution: *"This model is licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved."*
 
 Full license: [LICENSE.md](LICENSE.md)

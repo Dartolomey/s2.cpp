@@ -1,0 +1,43 @@
+NOTICE
+======
+
+This repository contains a Derivative Work of the Fish Audio S2 Pro materials.
+It is a fork of https://github.com/rodrigomatta/s2.cpp, which is itself built
+on the Fish Audio S2 Pro model and engine.
+
+This model is licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
+
+Built with Fish Audio — https://fish.audio
+
+The full license text is in LICENSE.md. Research and non-commercial use is
+permitted under that license. Any Commercial Purpose — including a hosted
+service, an API, or internal business use — requires a separate written license
+from Fish Audio: business@fish.audio.
+
+Changes from the original Fish Audio Materials
+----------------------------------------------
+This fork modifies the inference engine and its interfaces. The main changes
+relative to upstream rodrigomatta/s2.cpp are:
+
+- stateful streaming codec decode (stream_begin/stream_decode/stream_end)
+  instead of re-decoding the growing prefix for every chunk;
+- the first streamed chunk is one frame, so the first PCM byte is emitted
+  earlier;
+- flash attention and CUDA-graph capture for the decode steps;
+- Fast-AR with a KV cache, one codebook-embedding gather per frame, and the
+  sampling window kept on the GPU;
+- codec decode on a worker thread, overlapped with the AR;
+- one-shot reference encoding (`--prepare-voice`) and reuse of the
+  reference-prompt KV and of the KV buffer across server requests;
+- streaming is the only file path; the offline single-pass path was removed;
+- `--seed`, `--stream-file`, `--stream-decode-stride` and the HTTP `params`
+  object expose generation parameters that upstream hard-coded;
+- concurrent HTTP requests are queued instead of returning 503;
+- failures are errors instead of silent fallbacks: a failed GPU codec backend,
+  an unreadable reference, a failed prefill or a tokenizer without
+  `<|im_end|>` abort with a clear message (CLI exit 1, HTTP 400);
+- version string, license headers and runtime DLL deployment added for
+  self-contained builds.
+
+Engine source: src/, include/. Third-party components keep their own licenses
+and notices; see the "Third-party components" table in README.md.
