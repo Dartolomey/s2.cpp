@@ -210,6 +210,13 @@ Merged into the working branch as `7c97c5b` and re-measured: full run `runs/v084
 - Concurrent `/generate` requests now wait for the single synthesis slot instead of getting an immediate 503. Bounds: `--max-queued` (default 4 waiters) and `--queue-timeout-ms` (default 60 s); queue-full and timeout still return 503 with distinct messages. Verified: two concurrent requests both 200 (second waits for the first), `--max-queued 0` → immediate 503, `--queue-timeout-ms 1000` → 503 after 1.0 s.
 - Still no batch inference: queued requests cost separate full passes (documented in README limitations).
 
+### Engine accepted; quantization guidance
+The engine passed the acceptance run: 8-test CLI stream, server suite, TTFA matrix, ASR round-trip, memory, and the upstream comparison, with byte-identical deterministic output and no unhandled fallbacks. Recorded guidance for users:
+- `q4_k_m` is the quantization floor: it is the smallest quant where the voice keeps minimal audible errors. Below it (`q3_k`, `q2_k`) words stretch and the timbre drifts.
+- `q6_k` is the recommended quality/size point when VRAM allows (upstream file; not benchmarked here yet).
+- `q8_0` is near-lossless and was verified on the server path.
+README now carries this guidance and the project contacts (X/Twitch) in English and Russian.
+
 ### Errors instead of silent fallbacks
 The engine used to warn and continue on a slower path in several places. Now:
 - the codec no longer moves to the CPU when the requested GPU backend fails (including out-of-memory): `load_shared` takes `allow_cpu_fallback` (default false), prints the backend and device plus a hint to pass `--codec-cpu`, and aborts. `--codec-auto` stays the explicit flag that may choose CPU;

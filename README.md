@@ -11,6 +11,9 @@
 > The model weights are licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
 > See [LICENSE.md](LICENSE.md) for full terms. Commercial use requires a separate license from Fish Audio — contact [business@fish.audio](mailto:business@fish.audio).
 
+> **Community / Сообщество:** questions, builds and live debugging — [X @LusienBart](https://x.com/LusienBart) · [Twitch](https://www.twitch.tv/dartolomey). English or Russian.
+> Вопросы, сборки и живая отладка — X или Twitch, можно по-русски.
+
 ---
 
 ## What this is
@@ -45,6 +48,8 @@ GGUF files are published at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodri
 
 All variants include both the transformer weights and the audio codec in a single file.
 The quantized variants keep the codec tensors (`c.*`) in `F16`, so only the AR transformer is quantized.
+
+**Quantization floor and recommendation.** `q4_k_m` is the smallest quant we would ship — it is where the voice still has minimal audible errors. Below it (`q3_k`, `q2_k`) words start stretching and the voice colour drifts. When VRAM allows, `q6_k` is the recommended quality/size point (it is upstream's file and is not benchmarked in this fork yet — see the table above); `q8_0` is near-lossless.
 
 On CUDA builds, `s2.cpp` keeps the embedding tables on CPU in the hybrid offload path. This avoids unsupported CUDA `get_rows` cases for K-quant embedding tensors (`q2_k`, `q3_k`, `q4_k`, `q5_k`, `q6_k`) and avoids the unstable voice-cloning prefill behavior seen when those lookups were pushed to CUDA. Transformer layers, Fast-AR, and the KV cache can still be offloaded according to `--gpu-layers`. (The Vulkan/Metal multi-buffer split described upstream is unverified in this fork.)
 
@@ -662,6 +667,26 @@ The only intentional fallbacks are the ones that do not change the result: `--co
 - Voice cloning quality depends heavily on reference audio length and SNR
 - Windows: CUDA and Vulkan backends are supported; when using MSVC 2019+, ensure CUDA ≥ 12.4 is installed before building
 - macOS is untested
+
+---
+
+## Community
+
+Questions, build help, bug reports and live debugging:
+
+- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
+- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — live builds and debugging sessions
+
+English or Russian, either is fine.
+
+### Сообщество
+
+Вопросы, помощь со сборкой, баги и живая отладка:
+
+- **X / Twitter:** [@LusienBart](https://x.com/LusienBart)
+- **Twitch:** [twitch.tv/dartolomey](https://www.twitch.tv/dartolomey) — стримы сборки и отладки
+
+Писать можно на русском или английском.
 
 ---
 
